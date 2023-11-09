@@ -1,28 +1,66 @@
 <!-- always visible details -->
 <div
-  class="h-1.5 mb-6 -ml-4 sm:-ml-2.5 bg-zinc-100 dark:bg-zinc-700 w-1/3"
+  class="-ml-4 mb-6 h-1.5 w-1/3 bg-zinc-100 dark:bg-zinc-700 sm:-ml-2.5"
 ></div>
 
 {{ if not (eq "" .Npub) }}
-<div class="leading-5 mb-6">
+<div class="mb-6 break-all leading-5">
   <div class="text-sm text-strongpink">Author Public Key</div>
   {{.Npub}}
 </div>
 {{ end }}
 
+<!------>
+
+{{ if not (eq nil .FileMetadata) }}
 <!---->
+{{ if not (eq "" .FileMetadata.Summary) }}
+<div class="mb-6 leading-5">
+  <div class="text-sm text-strongpink">Summary</div>
+  {{.FileMetadata.Summary}}
+</div>
+{{ end }}
+<!---->
+{{ if not (eq "" .FileMetadata.Dim) }}
+<div class="mb-6 leading-5">
+  <div class="text-sm text-strongpink">Dimension</div>
+  {{.FileMetadata.Dim}}
+</div>
+{{ end }}
+<!---->
+{{ if not (eq "" .FileMetadata.Size) }}
+<div class="mb-6 leading-5">
+  <div class="text-sm text-strongpink">Size</div>
+  {{.FileMetadata.Size}} bytes
+</div>
+{{ end }}
+<!---->
+{{ if not (eq "" .FileMetadata.Magnet) }}
+<div class="mb-6 leading-5">
+  <div class="text-sm text-strongpink">Magnet URL</div>
+  {{.FileMetadata.Magnet}}
+</div>
+{{ end }}
+<!---->
+{{ end }}
+
+<!------>
 
 {{ if not (eq 0 (len .SeenOn)) }}
-<div class="leading-5 mb-6">
+<div class="mb-6 leading-5">
   <div class="text-sm text-strongpink">Seen on</div>
-  {{ range .SeenOn }}<a href="/r/{{.}}">{{.}}</a>
+  {{ range .SeenOn }}<a
+    href="/r/{{.}}"
+    class="underline-none pr-2 decoration-neutral-200 decoration-1 underline-offset-[6px] hover:underline"
+    >{{.}}</a
+  >
   {{ end }}
 </div>
 {{ end }}
 
 <!-- details hidden behind a toggle -->
 {{ if .HideDetails }}
-<div class="leading-5 mb-6 flex items-center print:hidden" _="">
+<div class="mb-6 flex items-center print:hidden">
   <input
     type="checkbox"
     id="advanced-switch"
@@ -45,34 +83,36 @@
   />
   <label
     for="advanced-switch"
-    class="bg-gray-300 dark:bg-zinc-800 -indent-96 cursor-pointer w-9 h-5 inline-block relative mr-2 rounded-full after:content-[&quot;&quot;] after:absolute after:w-4 after:h-4 after:transition after:rounded-2xl after:inset-0.5 after:bg-zinc-50 dark:after:bg-gray-700"
+    class="after:content-[&quot;&quot;] relative mr-2 inline-block h-5 w-9 cursor-pointer rounded-full bg-gray-300 -indent-96 after:absolute after:inset-0.5 after:h-4 after:w-4 after:rounded-2xl after:bg-zinc-50 after:transition dark:bg-zinc-800 dark:after:bg-gray-700"
     >&nbsp;</label
   >
   <label
     for="advanced-switch"
-    class="cursor-pointer text-sm pb-0.5 border-b-2 pb-0.5 border-b-gray-300"
+    class="cursor-pointer text-sm leading-4 underline decoration-neutral-200 decoration-1 underline-offset-[6px]"
     >Show more details</label
   >
 </div>
 {{ end }}
 
 <div id="hidden-fields" class="{{if .HideDetails}}hidden{{end}}">
-  <div class="leading-5 mb-6">
+  <div class="mb-6 leading-5">
     <div class="text-sm text-strongpink">Published at</div>
     {{.CreatedAt}}
   </div>
 
-  <div class="leading-5 mb-6">
+  <div class="mb-6 leading-5">
     <div class="text-sm text-strongpink">Kind type</div>
     {{.Kind}} {{ if not (eq .KindNIP "")}} -
-    <a href="https://github.com/nostr-protocol/nips/blob/master/{{.KindNIP}}.md"
+    <a
+      href="https://github.com/nostr-protocol/nips/blob/master/{{.KindNIP}}.md"
+      class="underline decoration-neutral-200 decoration-1 underline-offset-[6px]"
       >{{.KindDescription}}</a
     >
     {{ end }}
   </div>
 
   {{ if not (eq "" .Nevent) }}
-  <div class="leading-5 mb-6">
+  <div class="mb-6 leading-5">
     <div class="text-sm text-strongpink">Address Code</div>
     <div>{{.Nevent}}</div>
   </div>
@@ -80,19 +120,19 @@
 
   <!---->
 
-  <div class="leading-5 mb-6 px-4 pb-4 -mx-4 bg-gray-100 dark:bg-gray-700">
+  <div class="-mx-4 mb-6 bg-gray-100 px-4 pb-4 leading-5 dark:bg-gray-700">
     <div
-      class="px-4 py-1 -mx-4 text-gray-100 dark:text-gray-400 bg-gray-300 dark:bg-gray-800"
+      class="-mx-4 bg-gray-300 px-4 py-1 text-gray-100 dark:bg-gray-800 dark:text-gray-400"
     >
       Event JSON
     </div>
-    <div class="break-all font-mono whitespace-pre-wrap text-sm mt-4">
+    <div class="mt-4 whitespace-pre-wrap break-all font-mono text-sm">
       {{- .EventJSON}}
     </div>
   </div>
 
   {{ if not (eq "" .Nprofile) }}
-  <div class="leading-5 mb-6">
+  <div class="mb-6 break-all leading-5">
     <div class="text-sm text-strongpink">Author Profile Code</div>
     {{.Nprofile}}
   </div>

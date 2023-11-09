@@ -6,8 +6,8 @@ import (
 	_ "embed"
 	"html/template"
 
-	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip11"
+	sdk "github.com/nbd-wtf/nostr-sdk"
 	"github.com/tylermmorton/tmpl"
 )
 
@@ -17,8 +17,37 @@ const (
 	Note TemplateID = iota
 	LongForm
 	TelegramInstantView
+	FileMetadata
+	LiveEvent
+	LiveEventMessage
 	Other
 )
+
+var (
+	//go:embed templates/opengraph.html
+	tmplOpenGraph     string
+	OpenGraphTemplate = tmpl.MustCompile(&OpenGraphPartial{})
+)
+
+//tmpl:bind head_common.html
+type OpenGraphPartial struct {
+	SingleTitle string
+	// x (we will always render just the singletitle if we have that)
+	Superscript string
+	Subscript   string
+
+	BigImage string
+	// x (we will always render just the bigimage if we have that)
+	Video        string
+	VideoType    string
+	Image        string
+	ProxiedImage string
+
+	// this is the main text we should always have
+	Text string
+}
+
+func (*OpenGraphPartial) TemplateText() string { return tmplOpenGraph }
 
 var (
 	//go:embed templates/head_common.html
@@ -30,6 +59,9 @@ var (
 type HeadCommonPartial struct {
 	IsProfile          bool
 	TailwindDebugStuff template.HTML
+	NaddrNaked         string
+	NeventNaked        string
+	Oembed             string
 }
 
 func (*HeadCommonPartial) TemplateText() string { return tmplHeadCommon }
@@ -63,6 +95,10 @@ type DetailsPartial struct {
 	Kind            int
 	KindNIP         string
 	KindDescription string
+
+	// kind-specific stuff
+	FileMetadata *Kind1063Metadata
+	LiveEvent    *Kind30311Metadata
 }
 
 func (*DetailsPartial) TemplateText() string { return tmplDetails }
@@ -105,7 +141,7 @@ type TelegramInstantViewPage struct {
 	Content     template.HTML
 	Description string
 	Subject     string
-	Metadata    nostr.ProfileMetadata
+	Metadata    *sdk.ProfileMetadata
 	AuthorLong  string
 	CreatedAt   string
 }
@@ -164,10 +200,9 @@ type OtherPage struct {
 	DetailsPartial    `tmpl:"details"`
 	FooterPartial     `tmpl:"footer"`
 
-	IsParameterizedReplaceable bool
-	Naddr                      string
-	Kind                       int
-	KindDescription            string
+	Kind            int
+	KindDescription string
+	Alt             string
 }
 
 func (*OtherPage) TemplateText() string { return tmplOther }
@@ -179,33 +214,22 @@ var (
 )
 
 type NotePage struct {
+	OpenGraphPartial  `tmpl:"opengraph"`
 	HeadCommonPartial `tmpl:"head_common"`
 	TopPartial        `tmpl:"top"`
 	DetailsPartial    `tmpl:"details"`
 	ClientsPartial    `tmpl:"clients"`
 	FooterPartial     `tmpl:"footer"`
 
-	AuthorLong       string
 	Content          template.HTML
 	CreatedAt        string
-	Description      string
-	Image            string
-	Metadata         nostr.ProfileMetadata
-	Nevent           string
+	Metadata         *sdk.ProfileMetadata
 	Npub             string
 	NpubShort        string
-	Oembed           string
 	ParentLink       template.HTML
-	Proxy            string
 	SeenOn           []string
-	Style            string
 	Subject          string
-	TextImageURL     string
-	Title            string
 	TitleizedContent string
-	TwitterTitle     string
-	Video            string
-	VideoType        string
 }
 
 func (*NotePage) TemplateText() string { return tmplNote }
@@ -228,7 +252,7 @@ type ProfilePage struct {
 	CreatedAt                  string
 	Domain                     string
 	LastNotes                  []EnhancedEvent
-	Metadata                   nostr.ProfileMetadata
+	Metadata                   *sdk.ProfileMetadata
 	NormalizedAuthorWebsiteURL string
 	RenderedAuthorAboutText    template.HTML
 	Nevent                     string
@@ -240,6 +264,101 @@ type ProfilePage struct {
 }
 
 func (*ProfilePage) TemplateText() string { return tmplProfile }
+
+var (
+	//go:embed templates/file_metadata.html
+	tmplFileMetadata     string
+	FileMetadataTemplate = tmpl.MustCompile(&FileMetadataPage{})
+)
+
+type FileMetadataPage struct {
+	OpenGraphPartial  `tmpl:"opengraph"`
+	HeadCommonPartial `tmpl:"head_common"`
+	TopPartial        `tmpl:"top"`
+	DetailsPartial    `tmpl:"details"`
+	ClientsPartial    `tmpl:"clients"`
+	FooterPartial     `tmpl:"footer"`
+
+	Content          template.HTML
+	CreatedAt        string
+	Metadata         *sdk.ProfileMetadata
+	Npub             string
+	NpubShort        string
+	ParentLink       template.HTML
+	SeenOn           []string
+	Style            Style
+	Subject          string
+	TitleizedContent string
+	Alt              string
+
+	FileMetadata Kind1063Metadata
+	IsImage      bool
+	IsVideo      bool
+}
+
+func (*FileMetadataPage) TemplateText() string { return tmplFileMetadata }
+
+var (
+	//go:embed templates/live_event.html
+	tmplLiveEvent     string
+	LiveEventTemplate = tmpl.MustCompile(&LiveEventPage{})
+)
+
+type LiveEventPage struct {
+	OpenGraphPartial  `tmpl:"opengraph"`
+	HeadCommonPartial `tmpl:"head_common"`
+	TopPartial        `tmpl:"top"`
+	DetailsPartial    `tmpl:"details"`
+	ClientsPartial    `tmpl:"clients"`
+	FooterPartial     `tmpl:"footer"`
+
+	Content          template.HTML
+	CreatedAt        string
+	Metadata         *sdk.ProfileMetadata
+	Npub             string
+	NpubShort        string
+	ParentLink       template.HTML
+	SeenOn           []string
+	Style            Style
+	Subject          string
+	TitleizedContent string
+	Alt              string
+
+	LiveEvent Kind30311Metadata
+}
+
+func (*LiveEventPage) TemplateText() string { return tmplLiveEvent }
+
+var (
+	//go:embed templates/live_event_message.html
+	tmplLiveEventMessage     string
+	LiveEventMessageTemplate = tmpl.MustCompile(&LiveEventMessagePage{})
+)
+
+type LiveEventMessagePage struct {
+	OpenGraphPartial  `tmpl:"opengraph"`
+	HeadCommonPartial `tmpl:"head_common"`
+	TopPartial        `tmpl:"top"`
+	DetailsPartial    `tmpl:"details"`
+	ClientsPartial    `tmpl:"clients"`
+	FooterPartial     `tmpl:"footer"`
+
+	Content          template.HTML
+	CreatedAt        string
+	Metadata         *sdk.ProfileMetadata
+	Npub             string
+	NpubShort        string
+	ParentLink       template.HTML
+	SeenOn           []string
+	Style            Style
+	Subject          string
+	TitleizedContent string
+	Alt              string
+
+	LiveEventMessage Kind1311Metadata
+}
+
+func (*LiveEventMessagePage) TemplateText() string { return tmplLiveEventMessage }
 
 var (
 	//go:embed templates/relay.html

@@ -1,3 +1,5 @@
+export PATH := "./node_modules/.bin:" + env_var('PATH')
+
 dev:
     TAILWIND_DEBUG=true go run .
 
@@ -18,3 +20,6 @@ prettier:
 
 tailwind:
     tailwind -i tailwind.css -o static/tailwind-bundle.min.css --minify
+
+test:
+    go test -tags=nocache

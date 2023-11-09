@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/url"
 	"time"
 
+	"github.com/fiatjaf/eventstore"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip05"
 	"github.com/nbd-wtf/go-nostr/nip19"
-	"github.com/nbd-wtf/go-nostr/sdk"
+	sdk "github.com/nbd-wtf/nostr-sdk"
 	"golang.org/x/exp/slices"
 )
 
@@ -24,6 +23,7 @@ var (
 	}
 	everything = []string{
 		"wss://nostr-pub.wellorder.net",
+		"wss://saltivka.org",
 		"wss://relay.damus.io",
 		"wss://relay.nostr.bg",
 		"wss://nostr.wine",
@@ -56,23 +56,10 @@ type CachedEvent struct {
 	Relays []string     `json:"r"`
 }
 
-func getRelay() string {
-	if serial == 0 {
-		serial = rand.Intn(len(everything))
-	}
-	serial = (serial + 1) % len(everything)
-	return everything[serial]
-}
-
 func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Event, []string, error) {
-	if b, ok := cache.Get(code); ok {
-		v := CachedEvent{}
-		err := json.Unmarshal(b, &v)
-		return v.Event, v.Relays, err
-	}
+	wdb := eventstore.RelayWrapper{Store: db}
 
 	withRelays := false
-
 	if len(relayHints) > 0 {
 		withRelays = true
 	}
@@ -104,8 +91,7 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 	case nostr.EventPointer:
 		author = v.Author
 		filter.IDs = []string{v.ID}
-		relays = append(relays, getRelay())
-		relays = append(relays, getRelay())
+		relays = append(relays, getRandomRelay(), getRandomRelay())
 		relays = append(relays, v.Relays...)
 		withRelays = true
 	case nostr.EntityPointer:
@@ -117,16 +103,13 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 		if v.Kind != 0 {
 			filter.Kinds = append(filter.Kinds, v.Kind)
 		}
-		relays = append(relays, getRelay())
-		relays = append(relays, getRelay())
+		relays = append(relays, getRandomRelay(), getRandomRelay())
 		relays = append(relays, v.Relays...)
 		withRelays = true
 	case string:
 		if prefix == "note" {
 			filter.IDs = []string{v}
-			relays = append(relays, getRelay())
-			relays = append(relays, getRelay())
-			relays = append(relays, getRelay())
+			relays = append(relays, getRandomRelay(), getRandomRelay(), getRandomRelay())
 		} else if prefix == "npub" {
 			author = v
 			filter.Authors = []string{v}
@@ -135,6 +118,14 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 		}
 	}
 
+	// try to fetch in our internal eventstore first
+	if res, _ := wdb.QuerySync(ctx, filter); len(res) != 0 {
+		evt := res[0]
+		scheduleEventExpiration(evt.ID, time.Hour*24*7)
+		return evt, getRelaysForEvent(evt.ID), nil
+	}
+
+	// otherwise fetch from external relays
 	if author != "" {
 		// fetch relays for author
 		authorRelays := relaysForPubkey(ctx, author, relays...)
@@ -143,9 +134,8 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 		}
 		relays = append(relays, authorRelays...)
 	}
-
 	for len(relays) < 5 {
-		relays = append(relays, getRelay())
+		relays = append(relays, getRandomRelay())
 	}
 
 	relays = unique(relays)
@@ -171,7 +161,7 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 
 		for ie := range pool.SubManyEoseNonUnique(ctx, relays, nostr.Filters{filter}) {
 			if pu, err := url.Parse(ie.Relay.URL); err == nil {
-				successRelays = append(successRelays, pu.Host+pu.RawPath)
+				successRelays = append(successRelays, pu.Scheme+"://"+pu.Host+pu.RawPath)
 			}
 			result = ie.Event
 			countdown = min(countdown, 1)
@@ -184,60 +174,76 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 	}
 
 	if result == nil {
-		return nil, nil, fmt.Errorf("couldn't find this %s", prefix)
+		return nil, nil, fmt.Errorf("couldn't find this %s, did you include relay or author hints in it?", prefix)
 	}
 
-	cache.SetJSONWithTTL(code, CachedEvent{Event: result, Relays: successRelays}, time.Hour*24*7)
-	return result, successRelays, nil
+	// save stuff in cache and in internal store
+	wdb.Publish(ctx, *result)
+	// save relays if we got them
+	allRelays := attachRelaysToEvent(result.ID, successRelays...)
+	// keep track of what we have to delete later
+	scheduleEventExpiration(result.ID, time.Hour*24*7)
+
+	return result, allRelays, nil
 }
 
 func authorLastNotes(ctx context.Context, pubkey string, relays []string, isSitemap bool) []*nostr.Event {
-	key := ""
 	limit := 100
+	store := true
+	useLocalStore := true
 	if isSitemap {
-		key = "lns:" + pubkey
 		limit = 50000
-	} else {
-		key = "ln:" + pubkey
+		store = false
+		useLocalStore = false
 	}
 
-	lastNotes := make([]*nostr.Event, 0, limit)
-	if ok := cache.GetJSON(key, &lastNotes); ok {
-		return lastNotes
+	filter := nostr.Filter{
+		Kinds:   []int{nostr.KindTextNote},
+		Authors: []string{pubkey},
+		Limit:   limit,
 	}
+	var lastNotes []*nostr.Event
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*4)
-	defer cancel()
-
-	relays = append(relays, getRelay())
-	relays = append(relays, getRelay())
-	relays = unique(relays)
-
-	ch := pool.SubManyEose(ctx, relays, nostr.Filters{
-		{
-			Kinds:   []int{nostr.KindTextNote},
-			Authors: []string{pubkey},
-			Limit:   limit,
-		},
-	})
-
-	for {
-		select {
-		case ie, more := <-ch:
-			if !more {
-				goto end
+	// fetch from external relays asynchronously
+	external := make(chan []*nostr.Event)
+	go func() {
+		notes := make([]*nostr.Event, 0, filter.Limit)
+		defer func() {
+			external <- notes
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		relays = unique(append(relays, getRandomRelay(), getRandomRelay()))
+		ch := pool.SubManyEose(ctx, relays, nostr.Filters{filter})
+		for {
+			select {
+			case ie, more := <-ch:
+				if !more {
+					return
+				}
+				notes = append(notes, ie.Event)
+				if store {
+					db.SaveEvent(ctx, ie.Event)
+					attachRelaysToEvent(ie.Event.ID, ie.Relay.URL)
+					scheduleEventExpiration(ie.Event.ID, time.Hour*24)
+				}
+			case <-ctx.Done():
+				return
 			}
-			lastNotes = append(lastNotes, ie.Event)
-		case <-ctx.Done():
-			goto end
 		}
+	}()
+
+	// fetch from local store if available
+	if useLocalStore {
+		lastNotes, _ = eventstore.RelayWrapper{Store: db}.QuerySync(ctx, filter)
+	}
+	if len(lastNotes) < 5 {
+		// if we didn't get enough notes (or if we didn't even query the local store), wait for the external relays
+		lastNotes = <-external
 	}
 
-end:
-	slices.SortFunc(lastNotes, func(a, b *nostr.Event) bool { return a.CreatedAt > b.CreatedAt })
-	if len(lastNotes) > 0 {
-		cache.SetJSONWithTTL(key, lastNotes, time.Hour*24)
-	}
+	// sort before returning
+	slices.SortFunc(lastNotes, func(a, b *nostr.Event) int { return int(a.CreatedAt - b.CreatedAt) })
 	return lastNotes
 }
 
@@ -266,7 +272,7 @@ func relayLastNotes(ctx context.Context, relayUrl string, isSitemap bool) []*nos
 		})
 	}
 
-	slices.SortFunc(lastNotes, func(a, b *nostr.Event) bool { return a.CreatedAt > b.CreatedAt })
+	slices.SortFunc(lastNotes, func(a, b *nostr.Event) int { return int(a.CreatedAt - b.CreatedAt) })
 	if len(lastNotes) > 0 {
 		cache.SetJSONWithTTL(key, lastNotes, time.Hour*24)
 	}

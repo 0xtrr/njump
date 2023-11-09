@@ -2,8 +2,7 @@
 <html class="theme--default text-lg font-light print:text-base sm:text-xl">
   <meta charset="UTF-8" />
   <head>
-    <title>{{.TitleizedContent}}</title>
-
+    <title>Stream: {{.LiveEvent.Title}} by {{ .LiveEvent.Host.Name }}</title>
     {{template "opengraph" .OpenGraphPartial}}
     <!---->
     {{template "head_common" .HeadCommonPartial}}
@@ -56,17 +55,52 @@
           ></div>
 
           <article
-            class="prose-cite:text-sm prose prose mb-6 leading-5 dark:prose-invert prose-headings:font-light prose-p:m-0 prose-p:mb-2 prose-blockquote:mx-0 prose-blockquote:my-8 prose-blockquote:mb-2 prose-blockquote:mt-2 prose-blockquote:border-l-05rem prose-blockquote:border-solid prose-blockquote:border-l-neutral-200 prose-blockquote:py-2 prose-blockquote:pl-4 prose-blockquote:pr-0 prose-blockquote:pt-0 prose-blockquote:font-light prose-blockquote:not-italic prose-ol:m-0 prose-ol:p-0 prose-ol:pl-4 prose-ul:m-0 prose-ul:p-0 prose-ul:pl-4 prose-li:mb-2 dark:prose-blockquote:border-l-neutral-700 sm:prose-a:text-justify"
+            class="prose-cite:text-sm prose mb-6 max-w-full leading-5 dark:prose-invert prose-headings:font-light prose-p:m-0 prose-p:mb-2 prose-blockquote:mx-0 prose-blockquote:my-8 prose-blockquote:border-l-05rem prose-blockquote:border-solid prose-blockquote:border-l-gray-100 prose-blockquote:py-2 prose-blockquote:pl-4 prose-blockquote:pr-0 prose-ol:m-0 prose-ol:p-0 prose-ol:pl-4 prose-ul:m-0 prose-ul:p-0 prose-ul:pl-4 prose-li:mb-2 dark:prose-blockquote:border-l-zinc-800 sm:prose-a:text-justify"
           >
-            {{ if (not (eq "" .Subject))}}
-            <h1 class="text-2xl">{{.Subject}}</h1>
-            {{ else }}
-            <h1 class="hidden">
-              {{.Metadata.Name}} on Nostr: {{.TitleizedContent}}
+            <h1 class="text-2xl">
+              <span class="mr-2">{{.LiveEvent.Title}}</span>{{ if (eq "ended"
+              .LiveEvent.Status)}}
+              <span
+                class="whitespace-nowrap rounded bg-neutral-400 px-4 py-1 align-text-top text-base text-white dark:bg-neutral-700"
+                >Ended</span
+              >
+              {{ else if (eq "live" .LiveEvent.Status)}}
+              <span
+                class="whitespace-nowrap rounded bg-strongpink px-4 py-1 align-text-top text-base text-white"
+                >Live now!</span
+              >
+              {{ end }}
             </h1>
-            {{ end }}
+            <div class="mb-4">
+              {{ if not (eq "" .LiveEvent.HostNpub) }} Streaming hosted by
+              <a href="/{{ .LiveEvent.HostNpub }}"
+                >{{ .LiveEvent.Host.Name }}</a
+              >
+              {{ end }}
+            </div>
             <!-- main content -->
-            {{ .Content }}
+            <div class="mb-4">
+              {{ range .LiveEvent.Tags }}
+              <span
+                class="mr-2 whitespace-nowrap rounded bg-neutral-200 px-2 dark:bg-neutral-700 dark:text-white"
+                >{{ . }}</span
+              >
+              {{ end }}
+            </div>
+            {{ if (not (eq "" .LiveEvent.Summary))}}
+            <div>{{ .LiveEvent.Summary }}</div>
+            {{ end }} {{ if (not (eq "" .LiveEvent.Image))}}
+            <img
+              src="{{ .LiveEvent.Image }}"
+              alt="{{ .Alt }}"
+              _="on load
+            repeat until '{{ .LiveEvent.Status }}' == 'ended'
+              set @src to '{{ .LiveEvent.Image }}'
+              wait 5s
+            end
+            "
+            />
+            {{ end }}
           </article>
 
           {{template "details" .DetailsPartial}}

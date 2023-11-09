@@ -42,16 +42,16 @@ func renderArchive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if area == "npubs-archive" {
-		prefix = "pa"
+		prefix = "pa:"
 		pathPrefix = ""
 		title = "Nostr npubs archive"
 	} else {
-		prefix = "ra"
+		prefix = "ra:"
 		pathPrefix = "r/"
 		title = "Nostr relays archive"
 	}
 
-	keys := cache.GetPaginatedkeys(prefix, page, resultsPerPage)
+	keys := cache.GetPaginatedKeys(prefix, page, resultsPerPage)
 	data := []string{}
 	for i := 0; i < len(keys); i++ {
 		if area == "npubs-archive" {

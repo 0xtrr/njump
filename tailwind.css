@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 @layer utilities {
+  html, body {
+    font-size: 19px;
+  }
   .imgclip {
     clip-path: url(#svg-shape);
   }
@@ -12,7 +15,14 @@
       rgba(0, 0, 0, 0) 100%
     );
   }
-  .safari {
-    margin: 1cm 3cm;
+  
+  @media print {
+    @page {
+      margin: 2cm 3cm;
+    }
+    body.safari {
+      margin: 1cm 3cm;
+    }
   }
+
 }

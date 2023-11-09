@@ -2,8 +2,7 @@
 <html class="theme--default text-lg font-light print:text-base sm:text-xl">
   <meta charset="UTF-8" />
   <head>
-    <title>{{.TitleizedContent}}</title>
-
+    <title>File Metadata</title>
     {{template "opengraph" .OpenGraphPartial}}
     <!---->
     {{template "head_common" .HeadCommonPartial}}
@@ -56,7 +55,7 @@
           ></div>
 
           <article
-            class="prose-cite:text-sm prose prose mb-6 leading-5 dark:prose-invert prose-headings:font-light prose-p:m-0 prose-p:mb-2 prose-blockquote:mx-0 prose-blockquote:my-8 prose-blockquote:mb-2 prose-blockquote:mt-2 prose-blockquote:border-l-05rem prose-blockquote:border-solid prose-blockquote:border-l-neutral-200 prose-blockquote:py-2 prose-blockquote:pl-4 prose-blockquote:pr-0 prose-blockquote:pt-0 prose-blockquote:font-light prose-blockquote:not-italic prose-ol:m-0 prose-ol:p-0 prose-ol:pl-4 prose-ul:m-0 prose-ul:p-0 prose-ul:pl-4 prose-li:mb-2 dark:prose-blockquote:border-l-neutral-700 sm:prose-a:text-justify"
+            class="prose-cite:text-sm prose prose mb-6 leading-5 dark:prose-invert prose-headings:font-light prose-p:m-0 prose-p:mb-2 prose-blockquote:mx-0 prose-blockquote:my-8 prose-blockquote:border-l-05rem prose-blockquote:border-solid prose-blockquote:border-l-gray-100 prose-blockquote:py-2 prose-blockquote:pl-4 prose-blockquote:pr-0 prose-ol:m-0 prose-ol:p-0 prose-ol:pl-4 prose-ul:m-0 prose-ul:p-0 prose-ul:pl-4 prose-li:mb-2 dark:prose-blockquote:border-l-zinc-800 sm:prose-a:text-justify"
           >
             {{ if (not (eq "" .Subject))}}
             <h1 class="text-2xl">{{.Subject}}</h1>
@@ -66,7 +65,27 @@
             </h1>
             {{ end }}
             <!-- main content -->
-            {{ .Content }}
+
+            {{ if (not (eq "" .FileMetadata.Image))}}
+            <img src="{{ .FileMetadata.Image }}" alt="{{ .Alt }}" />
+            {{ else if .IsImage }}
+            <img src="{{ .FileMetadata.URL }}" alt="{{ .Alt }}" />
+            {{ else if .IsVideo }}
+            <video
+              controls
+              width="100%%"
+              class="max-h-[90vh] bg-neutral-300 dark:bg-zinc-700"
+            >
+              <source src="{{ .FileMetadata.URL }}" alt="{{ .Alt }}" />
+            </video>
+            {{ end }}
+
+            <a
+              href="{{ .FileMetadata.URL }}"
+              target="_new"
+              class="not-prose mx-auto mb-3 block w-4/5 basis-full rounded-lg border-0 bg-strongpink px-4 py-2 text-center text-[17px] font-light text-white no-underline sm:w-2/6"
+              >Download file</a
+            >
           </article>
 
           {{template "details" .DetailsPartial}}

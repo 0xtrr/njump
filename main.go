@@ -8,18 +8,21 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
+	eventstore_badger "github.com/fiatjaf/eventstore/badger"
+	"github.com/fiatjaf/khatru"
 	"github.com/kelseyhightower/envconfig"
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/rs/cors"
 	"github.com/rs/zerolog"
 )
 
 type Settings struct {
-	Port          string `envconfig:"PORT" default:"2999"`
-	Domain        string `envconfig:"DOMAIN" default:"njump.me"`
-	DiskCachePath string `envconfig:"DISK_CACHE_PATH" default:"/tmp/njump-cache"`
-	TailwindDebug bool   `envconfig:"TAILWIND_DEBUG"`
+	Port           string `envconfig:"PORT" default:"2999"`
+	Domain         string `envconfig:"DOMAIN" default:"njump.me"`
+	DiskCachePath  string `envconfig:"DISK_CACHE_PATH" default:"/tmp/njump-internal"`
+	EventStorePath string `envconfig:"EVENT_STORE_PATH" default:"/tmp/njump-db"`
+	TailwindDebug  bool   `envconfig:"TAILWIND_DEBUG"`
 }
 
 //go:embed static/*
@@ -33,22 +36,6 @@ var (
 	log                = zerolog.New(os.Stderr).Output(zerolog.ConsoleWriter{Out: os.Stdout}).With().Timestamp().Logger()
 	tailwindDebugStuff template.HTML
 )
-
-func updateArchives(ctx context.Context) {
-	// do this so we don't run this every time we restart it locally
-	time.Sleep(10 * time.Minute)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			loadNpubsArchive(ctx)
-			loadRelaysArchive(ctx)
-		}
-		time.Sleep(24 * time.Hour)
-	}
-}
 
 func main() {
 	err := envconfig.Process("", &s)
@@ -68,7 +55,13 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to load tailwind.config.js")
 			return
 		}
-		config := strings.Replace(string(configb), "module.exports", "tailwind.config", 1)
+		config := strings.Replace(
+			strings.Replace(
+				string(configb),
+				"plugins: [require('@tailwindcss/typography')]", "", 1,
+			),
+			"module.exports", "tailwind.config", 1,
+		)
 
 		styleb, err := os.ReadFile("tailwind.css")
 		if err != nil {
@@ -80,15 +73,24 @@ func main() {
 		tailwindDebugStuff = template.HTML(fmt.Sprintf("<script src=\"https://cdn.tailwindcss.com?plugins=typography\"></script><script>\n%s</script><style type=\"text/tailwindcss\">%s</style>", config, style))
 	}
 
-	// initialize disk cache
-	defer cache.initialize()()
+	initCache()
 
-	// initialize the function to update the npubs/relays archive
+	// initialize routines
 	ctx := context.Background()
 	go updateArchives(ctx)
+	go deleteOldCachedEvents(ctx)
+
+	// expose our internal cache as a relay (mostly for debugging purposes)
+	relay := khatru.NewRelay()
+	relay.QueryEvents = append(relay.QueryEvents, db.QueryEvents)
+	relay.RejectEvent = append(relay.RejectEvent,
+		func(context.Context, *nostr.Event) (bool, string) {
+			return true, "this relay is not writable"
+		},
+	)
 
 	// routes
-	mux := http.NewServeMux()
+	mux := relay.Router()
 	mux.Handle("/njump/static/", http.StripPrefix("/njump/", http.FileServer(http.FS(static))))
 	mux.HandleFunc("/relays-archive.xml", renderArchive)
 	mux.HandleFunc("/npubs-archive.xml", renderArchive)
@@ -106,9 +108,26 @@ func main() {
 	mux.HandleFunc("/", renderEvent)
 
 	log.Print("listening at http://0.0.0.0:" + s.Port)
-	if err := http.ListenAndServe("0.0.0.0:"+s.Port, cors.Default().Handler(mux)); err != nil {
+	if err := http.ListenAndServe("0.0.0.0:"+s.Port, cors.Default().Handler(relay)); err != nil {
 		log.Fatal().Err(err).Msg("")
 	}
 
 	select {}
+}
+
+func initCache() func() {
+	// initialize disk cache
+	deinit := cache.initialize()
+
+	// initialize eventstore database
+	if badgerBackend, ok := db.(*eventstore_badger.BadgerBackend); ok {
+		// it may be NullStore, in which case we do nothing
+		badgerBackend.Path = s.EventStorePath
+	}
+	db.Init()
+
+	return func() {
+		deinit()
+		db.Close()
+	}
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	html "html"
+	"html"
 	"html/template"
 	"io"
+	"math/rand"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip10"
 	"github.com/nbd-wtf/go-nostr/nip19"
+	sdk "github.com/nbd-wtf/nostr-sdk"
 )
 
 const XML_HEADER = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -59,6 +62,7 @@ var kindNames = map[int]string{
 	43:    "Channel Hide Message",
 	44:    "Channel Mute User",
 	1063:  "File Metadata",
+	1311:  "Live Chat Message",
 	1984:  "Reporting",
 	9734:  "Zap Request",
 	9735:  "Zap",
@@ -78,6 +82,7 @@ var kindNames = map[int]string{
 	30018: "Create or update a product",
 	30023: "Long-form Content",
 	30078: "Application-specific Data",
+	30311: "Live Event",
 }
 
 var kindNIPs = map[int]string{
@@ -96,6 +101,7 @@ var kindNIPs = map[int]string{
 	43:    "28",
 	44:    "28",
 	1063:  "94",
+	1311:  "53",
 	1984:  "56",
 	9734:  "57",
 	9735:  "57",
@@ -115,61 +121,29 @@ var kindNIPs = map[int]string{
 	30018: "15",
 	30023: "23",
 	30078: "78",
+	30311: "53",
 }
 
-type ClientReference struct {
-	ID   string
-	Name string
-	URL  string
-}
+type Style string
 
-func generateClientList(code string, event *nostr.Event) []ClientReference {
-	if event.Kind == 1 || event.Kind == 6 {
-		return []ClientReference{
-			{ID: "native", Name: "your native client", URL: "nostr:" + code},
-			{ID: "snort", Name: "Snort", URL: "https://Snort.social/e/" + code},
-			{ID: "nostrudel", Name: "Nostrudel", URL: "https://nostrudel.ninja/#/n/" + code},
-			{ID: "satellite", Name: "Satellite", URL: "https://satellite.earth/thread/" + event.ID},
-			{ID: "coracle", Name: "Coracle", URL: "https://coracle.social/" + code},
-			{ID: "primal", Name: "Primal", URL: "https://primal.net/thread/" + event.ID},
-			{ID: "nostter", Name: "Nostter", URL: "https://nostter.vercel.app/" + code},
-			{ID: "highlighter", Name: "Highlighter", URL: "https://highlighter.com/a/" + code},
-			{ID: "iris", Name: "Iris", URL: "https://iris.to/" + code},
-		}
-	} else if event.Kind == 0 {
-		return []ClientReference{
-			{ID: "native", Name: "your native client", URL: "nostr:" + code},
-			{ID: "nosta", Name: "Nosta", URL: "https://nosta.me/" + code},
-			{ID: "snort", Name: "Snort", URL: "https://snort.social/p/" + code},
-			{ID: "satellite", Name: "Satellite", URL: "https://satellite.earth/@" + code},
-			{ID: "coracle", Name: "Coracle", URL: "https://coracle.social/" + code},
-			{ID: "primal", Name: "Primal", URL: "https://primal.net/profile/" + event.PubKey},
-			{ID: "nostrudel", Name: "Nostrudel", URL: "https://nostrudel.ninja/#/u/" + code},
-			{ID: "nostter", Name: "Nostter", URL: "https://nostter.vercel.app/" + code},
-			{ID: "iris", Name: "Iris", URL: "https://iris.to/" + code},
-		}
-	} else if event.Kind == 30023 || event.Kind == 30024 {
-		return []ClientReference{
-			{ID: "native", Name: "your native client", URL: "nostr:" + code},
-			{ID: "yakihonne", Name: "YakiHonne", URL: "https://yakihonne.com/article/" + code},
-			{ID: "habla", Name: "Habla", URL: "https://habla.news/a/" + code},
-			{ID: "highlighter", Name: "Highlighter", URL: "https://highlighter.com/a/" + code},
-			{ID: "blogstack", Name: "Blogstack", URL: "https://blogstack.io/" + code},
-		}
-	}
-	return nil
-}
+const (
+	StyleTelegram   Style = "telegram"
+	StyleTwitter          = "twitter"
+	StyleIos              = "ios"
+	StyleAndroid          = "android"
+	StyleMattermost       = "mattermost"
+	StyleSlack            = "slack"
+	StyleDiscord          = "discord"
+	StyleWhatsapp         = "whatsapp"
+	StyleIframely         = "iframely"
+	StyleNormal           = "normal"
+	StyleUnknown          = "unknown"
+)
 
-func generateRelayBrowserClientList(host string) []ClientReference {
-	return []ClientReference{
-		{ID: "coracle", Name: "Coracle", URL: "https://coracle.social/relays/" + host},
-	}
-}
-
-func getPreviewStyle(r *http.Request) string {
+func getPreviewStyle(r *http.Request) Style {
 	if style := r.URL.Query().Get("style"); style != "" {
 		// debug mode
-		return style
+		return Style(style)
 	}
 
 	ua := strings.ToLower(r.Header.Get("User-Agent"))
@@ -177,23 +151,27 @@ func getPreviewStyle(r *http.Request) string {
 
 	switch {
 	case strings.Contains(ua, "telegrambot"):
-		return "telegram"
+		return StyleTelegram
 	case strings.Contains(ua, "twitterbot"):
-		return "twitter"
+		return StyleTwitter
+	case strings.Contains(ua, "iphone"), strings.Contains(ua, "ipad"), strings.Contains(ua, "ipod"):
+		return StyleIos
+	case strings.Contains(ua, "android"):
+		return StyleAndroid
 	case strings.Contains(ua, "mattermost"):
-		return "mattermost"
+		return StyleMattermost
 	case strings.Contains(ua, "slack"):
-		return "slack"
+		return StyleSlack
 	case strings.Contains(ua, "discord"):
-		return "discord"
+		return StyleDiscord
 	case strings.Contains(ua, "whatsapp"):
-		return "whatsapp"
+		return StyleWhatsapp
 	case strings.Contains(ua, "iframely"):
-		return "iframely"
+		return StyleIframely
 	case strings.Contains(accept, "text/html"):
-		return "normal"
+		return StyleNormal
 	default:
-		return "unknown"
+		return StyleUnknown
 	}
 }
 
@@ -201,15 +179,42 @@ func getParentNevent(event *nostr.Event) string {
 	parentNevent := ""
 	replyTag := nip10.GetImmediateReply(event.Tags)
 	if replyTag != nil {
-		relay := ""
-		if len(*replyTag) > 2 {
-			relay = (*replyTag)[2]
-		} else {
-			relay = ""
+		var relays []string
+		if (len(*replyTag) > 2) && ((*replyTag)[2] != "") {
+			relays = []string{(*replyTag)[2]}
 		}
-		parentNevent, _ = nip19.EncodeEvent((*replyTag)[1], []string{relay}, "")
+		parentNevent, _ = nip19.EncodeEvent((*replyTag)[1], relays, "")
 	}
 	return parentNevent
+}
+
+func attachRelaysToEvent(eventId string, relays ...string) []string {
+	key := "rls:" + eventId
+	existingRelays := make([]string, 0, 10)
+	if exists := cache.GetJSON(key, &existingRelays); exists {
+		relays = unique(append(existingRelays, relays...))
+	}
+	cache.SetJSONWithTTL(key, relays, time.Hour*24*7)
+	return relays
+}
+
+func getRelaysForEvent(eventId string) []string {
+	key := "rls:" + eventId
+	relays := make([]string, 0, 10)
+	cache.GetJSON(key, &relays)
+	return relays
+}
+
+func scheduleEventExpiration(eventId string, ts time.Duration) {
+	key := "ttl:" + eventId
+	nextExpiration := time.Now().Add(ts).Unix()
+	var currentExpiration int64
+	if exists := cache.GetJSON(key, &currentExpiration); exists {
+		if nextExpiration < currentExpiration {
+			return
+		}
+	}
+	cache.SetJSON(key, nextExpiration)
 }
 
 // Rendering functions
@@ -244,9 +249,9 @@ func replaceNostrURLsWithTags(matcher *regexp.Regexp, input string) string {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*4)
 			defer cancel()
 			name := getNameFromNip19(ctx, nip19)
-			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:bg-garnet px-1"><span class="font-bold">%s</span> (<span class="italic">%s</span>)</a>`, nip19, name, first_chars+"…"+last_chars)
+			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1"><span>%s</span> (<span class="italic">%s</span>)</a>`, nip19, name, first_chars+"…"+last_chars)
 		} else {
-			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:bg-garnet px-1">%s</a>`, nip19, first_chars+"…"+last_chars)
+			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1">%s</a>`, nip19, first_chars+"…"+last_chars)
 		}
 	})
 }
@@ -270,7 +275,7 @@ func getNameFromNip19(ctx context.Context, nip19 string) string {
 	if err != nil {
 		return nip19
 	}
-	metadata, err := nostr.ParseMetadata(*author)
+	metadata, err := sdk.ParseMetadata(author)
 	if err != nil {
 		return nip19
 	}
@@ -312,7 +317,7 @@ func renderQuotesAsHTML(ctx context.Context, input string, usingTelegramInstantV
 		}
 
 		content := fmt.Sprintf(
-			`<blockquote class="pl-4 pr-0 pt-0 pb-2 border-l-8 border-l-strongpink border-solid"><div class="-ml-4 bg-gray-100 dark:bg-zinc-800 mr-0 mt-0 mb-4 pl-4 pr-2 py-2">quoting %s </div> %s </blockquote>`, match, event.Content)
+			`<blockquote class="border-l-05rem border-l-strongpink border-solid"><div class="-ml-4 bg-gradient-to-r from-gray-100 dark:from-zinc-800 to-transparent mr-0 mt-0 mb-4 pl-4 pr-2 py-2">quoting %s </div> %s </blockquote>`, match, event.Content)
 		return basicFormatting(content, false, usingTelegramInstantView)
 	})
 }
@@ -346,7 +351,7 @@ func basicFormatting(input string, skipNostrEventLinks bool, usingTelegramInstan
 	for i, line := range lines {
 		line = replaceURLsWithTags(line,
 			imageReplacementTemplate,
-			`<video controls width="100%%"><source src="%s"></video>`,
+			`<video controls width="100%%" class="max-h-[90vh] bg-neutral-300 dark:bg-zinc-700"><source src="%s"></video>`,
 		)
 
 		line = replaceNostrURLsWithTags(nostrMatcher, line)
@@ -444,53 +449,6 @@ func normalizeWebsiteURL(u string) string {
 	return "https://" + u
 }
 
-func loadNpubsArchive(ctx context.Context) {
-	log.Debug().Msg("refreshing the npubs archive")
-
-	contactsArchive := make([]string, 0, 500)
-
-	for _, pubkey := range trustedPubKeys {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*4)
-		pubkeyContacts := contactsForPubkey(ctx, pubkey)
-		contactsArchive = append(contactsArchive, pubkeyContacts...)
-		cancel()
-	}
-
-	contactsArchive = unique(contactsArchive)
-	for _, contact := range contactsArchive {
-		log.Debug().Msgf("adding contact %s", contact)
-		cache.SetWithTTL("pa:"+contact, nil, time.Hour*24*90)
-	}
-}
-
-func loadRelaysArchive(ctx context.Context) {
-	log.Debug().Msg("refreshing the relays archive")
-
-	relaysArchive := make([]string, 0, 500)
-
-	for _, pubkey := range trustedPubKeys {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*4)
-		pubkeyContacts := relaysForPubkey(ctx, pubkey)
-		relaysArchive = append(relaysArchive, pubkeyContacts...)
-		cancel()
-	}
-
-	relaysArchive = unique(relaysArchive)
-	for _, relay := range relaysArchive {
-		for _, excluded := range excludedRelays {
-			if strings.Contains(relay, excluded) {
-				log.Debug().Msgf("skipping relay %s", relay)
-				continue
-			}
-		}
-		if strings.Contains(relay, "/npub1") {
-			continue // skip relays with personalyzed query like filter.nostr.wine
-		}
-		log.Debug().Msgf("adding relay %s", relay)
-		cache.SetWithTTL("ra:"+relay, nil, time.Hour*24*7)
-	}
-}
-
 func eventToHTML(evt *nostr.Event) template.HTML {
 	tagsHTML := "["
 	for t, tag := range evt.Tags {
@@ -539,4 +497,43 @@ func limitAt[V any](list []V, n int) []V {
 		return list
 	}
 	return list[0:n]
+}
+
+func humanDate(createdAt nostr.Timestamp) string {
+	ts := createdAt.Time()
+	now := time.Now()
+	if ts.Before(now.AddDate(0, -9, 0)) {
+		return ts.UTC().Format("02 Jan 2006")
+	} else if ts.Before(now.AddDate(0, 0, -6)) {
+		return ts.UTC().Format("Jan _2")
+	} else {
+		return ts.UTC().Format("Mon, Jan _2 15:04 UTC")
+	}
+}
+
+func shouldUseRelayForNip19(relayUrl string) bool {
+	for _, excluded := range excludedRelays {
+		if strings.Contains(relayUrl, excluded) {
+			return false
+		}
+	}
+	urlp, err := url.Parse(relayUrl)
+	if err != nil {
+		return false
+	}
+	if urlp.Scheme != "wss" && urlp.Scheme != "ws" {
+		return false
+	}
+	if urlp.Path != "" && urlp.Path != "/" {
+		return false
+	}
+	return true
+}
+
+func getRandomRelay() string {
+	if serial == 0 {
+		serial = rand.Intn(len(everything))
+	}
+	serial = (serial + 1) % len(everything)
+	return everything[serial]
 }
