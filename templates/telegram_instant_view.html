@@ -22,20 +22,29 @@
 {{ end }}
 
 <!-- stuff that affects the content inside the preview window -->
-<meta name="author" content="{{.Metadata.Name}}" />
+<meta name="author" content="{{.Metadata.ShortName}}" />
 <meta name="telegram:channel" content="@nostr_protocol" />
 
 <!-- basic content of the preview window -->
 <article>
   <h1>
-    {{ if not (eq "" .Subject) }} {{.Subject}} {{ else }} {{.Metadata.Name}} on
-    Nostr: {{ end }}
+    {{ if not (eq "" .Subject) }} {{.Subject}} {{ else }}
+    <a href="/{{.Metadata.Npub}}">{{.Metadata.ShortName}}</a> on Nostr: {{ end
+    }}
   </h1>
 
+  {{ if not (eq "" .ParentLink) }}
+  <aside>in reply to {{ .ParentLink }}</aside>
+  {{ end }}
+  <!---->
   {{ if not (eq "" .Summary) }}
-  <h2>{{ .Summary }}</h2>
+  <aside>{{ .Summary }}</aside>
   {{ end }}
 
   <!---->
-  {{.Content}}
+  {{.Content}} {{ if not (eq "" .Subject) }}
+  <aside>
+    <a href="/{{.Metadata.Npub}}">{{.Metadata.ShortName}}</a>
+  </aside>
+  {{ end }}
 </article>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip10"
 	"github.com/nbd-wtf/go-nostr/nip19"
 	sdk "github.com/nbd-wtf/nostr-sdk"
+	"github.com/texttheater/golang-levenshtein/levenshtein"
 )
 
 type EnhancedEvent struct {
@@ -22,6 +24,10 @@ type EnhancedEvent struct {
 
 func (ee EnhancedEvent) IsReply() bool {
 	return nip10.GetImmediateReply(ee.event.Tags) != nil
+}
+
+func (ee EnhancedEvent) Reply() *nostr.Tag {
+	return nip10.GetImmediateReply(ee.event.Tags)
 }
 
 func (ee EnhancedEvent) Preview() template.HTML {
@@ -36,6 +42,59 @@ func (ee EnhancedEvent) Preview() template.HTML {
 	}
 
 	return template.HTML(strings.Join(processedLines, "<br/>"))
+}
+
+func (ee EnhancedEvent) RssTitle() string {
+	regex := regexp.MustCompile(`(?i)<br\s?/?>`)
+	replacedString := regex.ReplaceAllString(string(ee.Preview()), " ")
+	words := strings.Fields(replacedString)
+	title := ""
+	for i, word := range words {
+		if len(title)+len(word)+1 <= 65 { // +1 for space
+			if title != "" {
+				title += " "
+			}
+			title += word
+		} else {
+			if i > 1 { // the first word len is > 65
+				title = title + " ..."
+			} else {
+				title = ""
+			}
+			break
+		}
+	}
+
+	content := ee.RssContent()
+	distance := levenshtein.DistanceForStrings([]rune(title), []rune(content), levenshtein.DefaultOptions)
+	similarityThreshold := 5
+	if distance <= similarityThreshold {
+		return ""
+	} else {
+		return title
+	}
+}
+
+func (ee EnhancedEvent) RssContent() string {
+	content := ee.event.Content
+	content = basicFormatting(html.EscapeString(content), true, false)
+	content = renderQuotesAsHTML(context.Background(), content, false)
+	if ee.IsReply() {
+		nevent, _ := nip19.EncodeEvent(ee.Reply().Value(), ee.relays, ee.event.PubKey)
+		neventShort := nevent[:8] + "…" + nevent[len(nevent)-4:]
+		content = "In reply to <a href='/" + nevent + "'>" + neventShort + "</a><br/>_________________________<br/><br/>" + content
+	}
+	return content
+}
+
+func (ee EnhancedEvent) Thumb() string {
+	imgRegex := regexp.MustCompile(`(https?://[^\s]+\.(?:png|jpe?g|gif|bmp|svg)(?:/[^\s]*)?)`)
+	matches := imgRegex.FindAllStringSubmatch(ee.event.Content, -1)
+	if len(matches) > 0 {
+		// The first match group captures the image URL
+		return matches[0][1]
+	}
+	return ""
 }
 
 func (ee EnhancedEvent) Npub() string {
@@ -75,7 +134,7 @@ type Data struct {
 	createdAt           string
 	modifiedAt          string
 	parentLink          template.HTML
-	metadata            *sdk.ProfileMetadata
+	metadata            sdk.ProfileMetadata
 	authorRelays        []string
 	authorLong          string
 	authorShort         string
@@ -310,16 +369,16 @@ func grabData(ctx context.Context, code string, isProfileSitemap bool) (*Data, e
 		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
 		defer cancel()
 		author, relays, _ := getEvent(ctx, data.npub, relaysForNip19)
-		if author != nil {
+		if author == nil {
+			data.metadata = sdk.ProfileMetadata{PubKey: event.PubKey}
+		} else {
 			data.metadata, _ = sdk.ParseMetadata(author)
-			if data.metadata != nil {
+			if data.metadata.Name != "" {
 				data.authorLong = fmt.Sprintf("%s (%s)", data.metadata.Name, data.npub)
 				data.authorShort = fmt.Sprintf("%s (%s)", data.metadata.Name, data.npubShort)
 			}
 		}
-		if len(relays) > 0 {
-			data.nprofile, _ = nip19.EncodeProfile(event.PubKey, limitAt(relays, 2))
-		}
+		data.nprofile, _ = nip19.EncodeProfile(event.PubKey, limitAt(relays, 2))
 	}
 
 	data.kindDescription = kindNames[event.Kind]

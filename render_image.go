@@ -1,11 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"fmt"
 	"image"
-	"image/draw"
+	"image/color"
 	"image/png"
 	"net/http"
 	"strings"
@@ -13,8 +14,9 @@ import (
 	"unicode"
 
 	"github.com/apatters/go-wordwrap"
-	"github.com/lukevers/freetype-go/freetype"
-	"github.com/lukevers/freetype-go/freetype/truetype"
+	"github.com/fogleman/gg"
+	"github.com/golang/freetype/truetype"
+	"golang.org/x/image/font"
 )
 
 const (
@@ -22,8 +24,14 @@ const (
 	MAX_CHARS_PER_LINE       = 52
 	MAX_CHARS_PER_QUOTE_LINE = 48
 	FONT_SIZE                = 7
+	FONT_DPI                 = 260
 
-	BLOCK = "▒"
+	BLOCK = "|"
+)
+
+var (
+	BACKGROUND = color.RGBA{23, 23, 23, 255}
+	FOREGROUND = color.RGBA{255, 230, 238, 255}
 )
 
 //go:embed fonts/*
@@ -151,54 +159,49 @@ func normalizeText(input []string, breakWords bool) []string {
 	return lines
 }
 
-func drawImage(lines []string, font *truetype.Font, style Style) (image.Image, error) {
+func drawImage(lines []string, ttf *truetype.Font, style Style) (image.Image, error) {
 	width := 700
 	height := 525
-	paddingLeft := 0
+	paddingLeft := 5
 	switch style {
 	case StyleTelegram:
-		paddingLeft = 15
+		paddingLeft += 10
+		width -= 10
 	case StyleTwitter:
 		height = width * 268 / 512
 	}
 
-	// get the physical image ready with colors/size
-	fg, bg := image.Black, image.White
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := gg.NewContext(width, height)
+	img.SetColor(BACKGROUND)
+	img.Clear()
+	img.SetColor(FOREGROUND)
+	img.SetFontFace(truetype.NewFace(ttf, &truetype.Options{
+		Size:    FONT_SIZE,
+		DPI:     FONT_DPI,
+		Hinting: font.HintingFull,
+	}))
 
-	// draw the empty image
-	draw.Draw(img, img.Bounds(), bg, image.Point{}, draw.Src)
-
-	// create new freetype context to get ready for adding text.
-	c := freetype.NewContext()
-	c.SetDPI(300)
-	c.SetFont(font)
-	c.SetFontSize(FONT_SIZE)
-	c.SetClip(img.Bounds())
-	c.SetDst(img)
-	c.SetSrc(fg)
-	c.SetHinting(freetype.NoHinting)
-
-	// draw each line separately
-	var count float64 = 1
-	for _, line := range lines {
-		if err := drawText(c, line, count, paddingLeft); err != nil {
-			return nil, err
-		}
-		count++
+	lineSpacing := 0.3
+	lineHeight := float64(FONT_SIZE)*FONT_DPI/72.0 + float64(FONT_SIZE)*lineSpacing*FONT_DPI/72.0
+	for i, line := range lines {
+		y := float64(i)*lineHeight + 50                  // Calculate the Y position for each line
+		img.DrawString(line, float64(20+paddingLeft), y) // Draw the line at the calculated Y position
 	}
 
-	return img, nil
-}
+	// create the stamp image
+	logo, _ := static.ReadFile("static/logo.png")
+	stampImg, _ := png.Decode(bytes.NewBuffer(logo))
+	stampWidth := stampImg.Bounds().Dx()
+	stampHeight := stampImg.Bounds().Dy()
 
-func drawText(c *freetype.Context, text string, line float64, paddingLeft int) error {
-	// We need an offset because we need to know where exactly on the
-	// image to place the text. The `line` is how much of an offset
-	// that we need to provide (which line the text is going on).
-	offsetY := 10 + int(c.PointToFix32(FONT_SIZE*line)>>8)
+	// Calculate the position for the stamp in the bottom right corner
+	stampX := width - stampWidth - 20
+	stampY := height - stampHeight - 20
 
-	_, err := c.DrawString(text, freetype.Pt(10+paddingLeft, offsetY))
-	return err
+	// Draw the stamp onto the image
+	img.DrawImage(stampImg, stampX, stampY)
+
+	return img.Image(), nil
 }
 
 // replace nevent and note with their text, as an extra line prefixed by BLOCK
@@ -259,6 +262,11 @@ func getLanguage(text string) (*truetype.Font, bool, error) {
 		breakWords bool
 	}{
 		{
+			unicode.Han,
+			"fonts/NotoSansSC.ttf",
+			true,
+		},
+		{
 			unicode.Katakana,
 			"fonts/NotoSansJP.ttf",
 			true,
@@ -266,11 +274,6 @@ func getLanguage(text string) (*truetype.Font, bool, error) {
 		{
 			unicode.Hiragana,
 			"fonts/NotoSansJP.ttf",
-			true,
-		},
-		{
-			unicode.Han,
-			"fonts/NotoSansTC.ttf",
 			true,
 		},
 		{
@@ -325,7 +328,7 @@ gotLang:
 		return nil, false, err
 	}
 
-	font, err := freetype.ParseFont(fontData)
+	font, err := truetype.Parse(fontData)
 	if err != nil {
 		return nil, false, err
 	}

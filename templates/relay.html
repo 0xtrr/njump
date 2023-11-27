@@ -8,18 +8,25 @@
     <meta property="og:site_name" content="{{.Hostname}} - nostr relay" />
     {{ if not (eq "" .Info.Icon) }}
     <meta property="og:image" content="{{.Info.Icon}}" />
-    <meta property="twitter:image" content="{{.Proxy}}{{.Info.Icon}}" />
+    <meta name="twitter:image" content="{{.Proxy}}{{.Info.Icon}}" />
     {{end}} {{ if not (eq "" .Info.Description) }}
     <meta property="og:description" content="{{.Info.Description}}" />
     <meta name="twitter:description" content="{{.Info.Description}}" />
     {{end}}
-    <meta property="twitter:card" content="summary" />
+    <meta name="twitter:card" content="summary" />
 
     <link
       rel="sitemap"
       type="application/xml"
       title="Sitemap for {{.Hostname}}"
       href="/r/{{.Hostname}}.xml"
+    />
+
+    <link
+      rel="alternate"
+      type="application/atom+xml"
+      title="RSS"
+      href="/r/{{.Hostname}}.rss"
     />
 
     {{template "head_common" .HeadCommonPartial}}
@@ -72,6 +79,7 @@
           </div>
           <div
             class="prose mb-6 leading-5 dark:prose-invert prose-headings:font-light sm:prose-a:text-justify"
+            dir="auto"
           >
             {{.Info.Description}}
           </div>
@@ -130,6 +138,7 @@
                 <div
                   class="mt-0.5 max-h-40 basis-full overflow-hidden hover:text-strongpink"
                   _="on load if my scrollHeight > my offsetHeight add .gradient"
+                  dir="auto"
                 >
                   {{$ee.Preview}}
                 </div>

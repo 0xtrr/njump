@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/pelletier/go-toml"
 )
@@ -28,44 +30,85 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		// remove the "nostr:" prefix
 		http.Redirect(w, r, "/"+code[6:], http.StatusFound)
 		return
-	} else if strings.HasPrefix(code, "npub") || strings.HasPrefix(code, "nprofile") {
+	}
+
+	// decode the nip19 code we've received
+	prefix, decoded, err := nip19.Decode(code)
+	if err != nil {
+		// if it's a 32-byte hex assume it's an event id
+		if _, err := hex.DecodeString(code); err == nil && len(code) == 64 {
+			redirectNevent, _ := nip19.EncodeEvent(code, []string{}, "")
+			http.Redirect(w, r, "/"+redirectNevent, http.StatusFound)
+			return
+		}
+
+		// it may be a NIP-05
+		if strings.Contains(code, ".") {
+			renderProfile(w, r, code)
+			return
+		}
+
+		// otherwise error
+		w.Header().Set("Cache-Control", "max-age=60")
+		errorPage := &ErrorPage{
+			Errors: err.Error(),
+		}
+		errorPage.TemplateText()
+		w.WriteHeader(http.StatusNotFound)
+		ErrorTemplate.Render(w, errorPage)
+		return
+	}
+
+	// render npub and nprofile using a separate function
+	if prefix == "npub" || prefix == "nprofile" {
 		// it's a profile
 		renderProfile(w, r, code)
 		return
 	}
 
-	fmt.Println(r.URL.Path, "#/", r.Header.Get("user-agent"))
-
-	// force note1 to become nevent1
-	if strings.HasPrefix(code, "note1") {
-		_, redirectHex, err := nip19.Decode(code)
-		if err != nil {
-			w.Header().Set("Cache-Control", "max-age=60")
-			http.Error(w, "error decoding note1 code: "+err.Error(), 404)
-			return
-		}
-		redirectNevent, _ := nip19.EncodeEvent(redirectHex.(string), []string{}, "")
-		http.Redirect(w, r, "/"+redirectNevent, http.StatusFound)
+	// Check if the embed parameter is set to "yes"
+	embedParam := r.URL.Query().Get("embed")
+	if embedParam == "yes" {
+		renderEmbedded(w, r, code)
+		return
 	}
 
-	host := r.Header.Get("X-Forwarded-Host")
-	if host == "" {
-		host = r.Host
-	}
-
-	style := getPreviewStyle(r)
-
+	// get data for this event
 	data, err := grabData(r.Context(), code, false)
 	if err != nil {
 		w.Header().Set("Cache-Control", "max-age=60")
-		http.Error(w, "failed to fetch event related data: "+err.Error(), 404)
+		errorPage := &ErrorPage{
+			Errors: err.Error(),
+		}
+		errorPage.TemplateText()
+		w.WriteHeader(http.StatusNotFound)
+		ErrorTemplate.Render(w, errorPage)
 		return
 	}
 
+	// if the result is a kind:0 render this as a profile
 	if data.event.Kind == 0 {
-		// it's a NIP-05 profile
 		renderProfile(w, r, data.npub)
 		return
+	}
+
+	// if we originally got a note code or an nevent with no hints
+	// augment the URL to point to an nevent with hints -- redirect
+	if p, ok := decoded.(nostr.EventPointer); (ok && p.Author == "" && len(p.Relays) == 0) || prefix == "note" {
+		http.Redirect(w, r, "/"+data.nevent, http.StatusFound)
+		return
+	}
+
+	// from here onwards we know we're rendering an event
+	fmt.Println(r.URL.Path, "#/", r.Header.Get("user-agent"))
+
+	// gather page style from user-agent
+	style := getPreviewStyle(r)
+
+	// gather host
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
 	}
 
 	var subject string
@@ -79,13 +122,23 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	useTextImage := (data.event.Kind == 1 || data.event.Kind == 30023) &&
-		data.image == "" && data.video == "" && len(data.event.Content) > 133
+	useTextImage := false
+
+	if data.event.Kind == 1 || data.event.Kind == 30023 {
+		if data.image == "" && data.video == "" && len(data.event.Content) > 133 {
+			useTextImage = true
+		}
+		if style == StyleTwitter {
+			useTextImage = true
+		}
+	}
 
 	if tgiv := r.URL.Query().Get("tgiv"); tgiv == "true" || (style == StyleTelegram && tgiv != "false") {
 		// do telegram instant preview (only works on telegram mobile apps, not desktop)
 		if data.event.Kind == 30023 || // do it for longform articles
 			(data.event.Kind == 1 && len(data.event.Content) > 650) || // or very long notes
+			(data.parentLink != "") || // or notes that are replies (so we can navigate to them from telegram)
+			(strings.Contains(data.content, "nostr:")) || // or notes that quote other stuff (idem)
 			// or shorter notes that should be using text-to-image stuff but are not because they have video or images
 			(data.event.Kind == 1 && len(data.event.Content)-len(data.image) > 133 && !useTextImage) {
 			data.templateId = TelegramInstantView
@@ -205,7 +258,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		data.content = basicFormatting(html.EscapeString(data.content), true, false)
 		// then we render quotes as HTML, which will also apply basicFormatting to all the internal quotes
 		data.content = renderQuotesAsHTML(r.Context(), data.content, data.templateId == TelegramInstantView)
-		// we must do this because inside <blockquotes> we must treat <img>s different when telegram_instant_view
+		// we must do this because inside <blockquotes> we must treat <img>s differently when telegram_instant_view
 	}
 
 	w.Header().Set("Content-Type", "text/html")
@@ -273,6 +326,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 			Metadata:    data.metadata,
 			AuthorLong:  data.authorLong,
 			CreatedAt:   data.createdAt,
+			ParentLink:  data.parentLink,
 		})
 	case Note:
 		if style == StyleTwitter {
@@ -290,8 +344,9 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 			opengraph.BigImage = opengraph.Image
 		}
 
+		enhancedCode := data.nevent
 		if data.naddr != "" {
-			code = data.naddr
+			enhancedCode = data.naddr
 		}
 
 		err = NoteTemplate.Render(w, &NotePage{
@@ -305,7 +360,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 			},
 			DetailsPartial: detailsData,
 			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(style, code, data.event),
+				Clients: generateClientList(style, enhancedCode, data.event),
 			},
 
 			Content:          template.HTML(data.content),
@@ -330,7 +385,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 			},
 			DetailsPartial: detailsData,
 			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(style, code, data.event),
+				Clients: generateClientList(style, data.nevent, data.event),
 			},
 
 			CreatedAt:        data.createdAt,

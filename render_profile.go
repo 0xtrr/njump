@@ -10,18 +10,28 @@ import (
 
 func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 	fmt.Println(r.URL.Path, "@.", r.Header.Get("user-agent"))
-	w.Header().Set("Content-Type", "text/html")
 
 	isSitemap := false
 	if strings.HasSuffix(code, ".xml") {
-		isSitemap = true
 		code = code[:len(code)-4]
+		isSitemap = true
+	}
+
+	isRSS := false
+	if strings.HasSuffix(code, ".rss") {
+		code = code[:len(code)-4]
+		isRSS = true
 	}
 
 	data, err := grabData(r.Context(), code, isSitemap)
 	if err != nil {
 		w.Header().Set("Cache-Control", "max-age=60")
-		http.Error(w, "error fetching event: "+err.Error(), 404)
+		errorPage := &ErrorPage{
+			Errors: err.Error(),
+		}
+		errorPage.TemplateText()
+		w.WriteHeader(http.StatusNotFound)
+		ErrorTemplate.Render(w, errorPage)
 		return
 	}
 
@@ -29,7 +39,27 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 		w.Header().Set("Cache-Control", "max-age=3600")
 	}
 
-	if !isSitemap {
+	if isSitemap {
+		w.Header().Add("content-type", "text/xml")
+		w.Write([]byte(XML_HEADER))
+		SitemapTemplate.Render(w, &SitemapPage{
+			Host:       s.Domain,
+			ModifiedAt: data.modifiedAt,
+			Npub:       data.npub,
+			LastNotes:  data.renderableLastNotes,
+		})
+	} else if isRSS {
+		w.Header().Add("content-type", "text/xml")
+		w.Write([]byte(XML_HEADER))
+		RSSTemplate.Render(w, &RSSPage{
+			Host:       s.Domain,
+			ModifiedAt: data.modifiedAt,
+			Npub:       data.npub,
+			Metadata:   data.metadata,
+			LastNotes:  data.renderableLastNotes,
+		})
+	} else {
+		w.Header().Add("content-type", "text/html")
 		err = ProfileTemplate.Render(w, &ProfilePage{
 			HeadCommonPartial: HeadCommonPartial{IsProfile: true, TailwindDebugStuff: tailwindDebugStuff},
 			DetailsPartial: DetailsPartial{
@@ -41,7 +71,7 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 				Kind:            data.event.Kind,
 			},
 			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(getPreviewStyle(r), code, data.event),
+				Clients: generateClientList(getPreviewStyle(r), data.nprofile, data.event),
 			},
 
 			Metadata:                   data.metadata,
@@ -51,15 +81,6 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 			Nprofile:                   data.nprofile,
 			AuthorRelays:               data.authorRelays,
 			LastNotes:                  data.renderableLastNotes,
-		})
-	} else {
-		w.Header().Add("content-type", "text/xml")
-		w.Write([]byte(XML_HEADER))
-		SitemapTemplate.Render(w, &SitemapPage{
-			Host:       s.Domain,
-			ModifiedAt: data.modifiedAt,
-			Npub:       data.npub,
-			LastNotes:  data.renderableLastNotes,
 		})
 	}
 

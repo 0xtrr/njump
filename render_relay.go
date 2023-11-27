@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -9,6 +10,8 @@ import (
 )
 
 func renderRelayPage(w http.ResponseWriter, r *http.Request) {
+	fmt.Println(r.URL.Path, "@.", r.Header.Get("user-agent"))
+
 	hostname := r.URL.Path[3:]
 
 	if strings.HasPrefix(hostname, "wss:/") || strings.HasPrefix(hostname, "ws:/") {
@@ -18,14 +21,30 @@ func renderRelayPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isSitemap := false
-
 	if strings.HasSuffix(hostname, ".xml") {
 		hostname = hostname[:len(hostname)-4]
 		isSitemap = true
 	}
 
+	isRSS := false
+	if strings.HasSuffix(hostname, ".rss") {
+		hostname = hostname[:len(hostname)-4]
+		isRSS = true
+	}
+
 	// relay metadata
-	info, _ := nip11.Fetch(r.Context(), hostname)
+	info, err := nip11.Fetch(r.Context(), hostname)
+	if err != nil {
+		w.Header().Set("Cache-Control", "max-age=60")
+		errorPage := &ErrorPage{
+			Message: "The relay you are looking for does not exist or is offline; check the name in the url or try later",
+			Errors:  err.Error(),
+		}
+		errorPage.TemplateText()
+		w.WriteHeader(http.StatusNotFound)
+		ErrorTemplate.Render(w, errorPage)
+		return
+	}
 	if info == nil {
 		info = &nip11.RelayInformationDocument{
 			Name: hostname,
@@ -49,20 +68,7 @@ func renderRelayPage(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "max-age=60")
 	}
 
-	if !isSitemap {
-		RelayTemplate.Render(w, &RelayPage{
-			HeadCommonPartial: HeadCommonPartial{IsProfile: false, TailwindDebugStuff: tailwindDebugStuff},
-			ClientsPartial: ClientsPartial{
-				Clients: generateRelayBrowserClientList(hostname),
-			},
-
-			Info:       info,
-			Hostname:   hostname,
-			Proxy:      "https://" + hostname + "/njump/proxy?src=",
-			LastNotes:  renderableLastNotes,
-			ModifiedAt: lastEventAt.Format("2006-01-02T15:04:05Z07:00"),
-		})
-	} else {
+	if isSitemap {
 		w.Header().Add("content-type", "text/xml")
 		w.Write([]byte(XML_HEADER))
 		SitemapTemplate.Render(w, &SitemapPage{
@@ -70,6 +76,31 @@ func renderRelayPage(w http.ResponseWriter, r *http.Request) {
 			ModifiedAt:    lastEventAt.Format("2006-01-02T15:04:05Z07:00"),
 			LastNotes:     renderableLastNotes,
 			RelayHostname: hostname,
+			Info:          info,
+		})
+
+	} else if isRSS {
+		w.Header().Add("content-type", "text/xml")
+		w.Write([]byte(XML_HEADER))
+		RSSTemplate.Render(w, &RSSPage{
+			Host:          s.Domain,
+			ModifiedAt:    lastEventAt.Format("2006-01-02T15:04:05Z07:00"),
+			LastNotes:     renderableLastNotes,
+			RelayHostname: hostname,
+			Info:          info,
+		})
+
+	} else {
+		RelayTemplate.Render(w, &RelayPage{
+			HeadCommonPartial: HeadCommonPartial{IsProfile: false, TailwindDebugStuff: tailwindDebugStuff},
+			ClientsPartial: ClientsPartial{
+				Clients: generateRelayBrowserClientList(hostname),
+			},
+			Info:       info,
+			Hostname:   hostname,
+			Proxy:      "https://" + hostname + "/njump/proxy?src=",
+			LastNotes:  renderableLastNotes,
+			ModifiedAt: lastEventAt.Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
 }

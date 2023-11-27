@@ -5,6 +5,7 @@ package main
 import (
 	_ "embed"
 	"html/template"
+	"strings"
 
 	"github.com/nbd-wtf/go-nostr/nip11"
 	sdk "github.com/nbd-wtf/nostr-sdk"
@@ -141,9 +142,10 @@ type TelegramInstantViewPage struct {
 	Content     template.HTML
 	Description string
 	Subject     string
-	Metadata    *sdk.ProfileMetadata
+	Metadata    sdk.ProfileMetadata
 	AuthorLong  string
 	CreatedAt   string
+	ParentLink  template.HTML
 }
 
 func (*TelegramInstantViewPage) TemplateText() string { return tmplTelegramInstantView }
@@ -223,7 +225,7 @@ type NotePage struct {
 
 	Content          template.HTML
 	CreatedAt        string
-	Metadata         *sdk.ProfileMetadata
+	Metadata         sdk.ProfileMetadata
 	Npub             string
 	NpubShort        string
 	ParentLink       template.HTML
@@ -233,6 +235,25 @@ type NotePage struct {
 }
 
 func (*NotePage) TemplateText() string { return tmplNote }
+
+var (
+	//go:embed templates/embedded_note.html
+	tmplEmbeddedNote     string
+	EmbeddedNoteTemplate = tmpl.MustCompile(&EmbeddedNotePage{})
+)
+
+type EmbeddedNotePage struct {
+	Content   template.HTML
+	CreatedAt string
+	Metadata  sdk.ProfileMetadata
+	Npub      string
+	NpubShort string
+	SeenOn    []string
+	Subject   string
+	Url       string
+}
+
+func (*EmbeddedNotePage) TemplateText() string { return tmplEmbeddedNote }
 
 var (
 	//go:embed templates/profile.html
@@ -252,7 +273,7 @@ type ProfilePage struct {
 	CreatedAt                  string
 	Domain                     string
 	LastNotes                  []EnhancedEvent
-	Metadata                   *sdk.ProfileMetadata
+	Metadata                   sdk.ProfileMetadata
 	NormalizedAuthorWebsiteURL string
 	RenderedAuthorAboutText    template.HTML
 	Nevent                     string
@@ -281,7 +302,7 @@ type FileMetadataPage struct {
 
 	Content          template.HTML
 	CreatedAt        string
-	Metadata         *sdk.ProfileMetadata
+	Metadata         sdk.ProfileMetadata
 	Npub             string
 	NpubShort        string
 	ParentLink       template.HTML
@@ -314,7 +335,7 @@ type LiveEventPage struct {
 
 	Content          template.HTML
 	CreatedAt        string
-	Metadata         *sdk.ProfileMetadata
+	Metadata         sdk.ProfileMetadata
 	Npub             string
 	NpubShort        string
 	ParentLink       template.HTML
@@ -345,7 +366,7 @@ type LiveEventMessagePage struct {
 
 	Content          template.HTML
 	CreatedAt        string
-	Metadata         *sdk.ProfileMetadata
+	Metadata         sdk.ProfileMetadata
 	Npub             string
 	NpubShort        string
 	ParentLink       template.HTML
@@ -396,6 +417,7 @@ type SitemapPage struct {
 
 	// for the relay sitemap
 	RelayHostname string
+	Info          *nip11.RelayInformationDocument
 
 	// for the profile and relay sitemaps
 	LastNotes []EnhancedEvent
@@ -406,3 +428,63 @@ type SitemapPage struct {
 }
 
 func (*SitemapPage) TemplateText() string { return tmplSitemap }
+
+var (
+	//go:embed templates/rss.xml
+	tmplRSS     string
+	RSSTemplate = tmpl.MustCompile(&RSSPage{})
+)
+
+type RSSPage struct {
+	Host       string
+	ModifiedAt string
+	Title      string
+
+	// for the profile RSS
+	Npub     string
+	Metadata sdk.ProfileMetadata
+
+	// for the relay RSS
+	RelayHostname string
+	Info          *nip11.RelayInformationDocument
+
+	// for the profile and relay RSSs
+	LastNotes []EnhancedEvent
+
+	// for the archive RSS
+	PathPrefix string
+	Data       []string
+}
+
+func (*RSSPage) TemplateText() string { return tmplRSS }
+
+var (
+	//go:embed templates/error.html
+	tmplError     string
+	ErrorTemplate = tmpl.MustCompile(&ErrorPage{})
+)
+
+type ErrorPage struct {
+	HeadCommonPartial `tmpl:"head_common"`
+	TopPartial        `tmpl:"top"`
+	FooterPartial     `tmpl:"footer"`
+	Message           template.HTML
+	Errors            string
+}
+
+func (e *ErrorPage) TemplateText() string {
+	if e.Message != "" {
+		return tmplError
+	}
+	switch {
+	case strings.Contains(e.Errors, "invalid checksum"):
+		e.Message = "It looks like you entered an invalid event code.<br> Check if you copied it fully, a good idea is compare the first and the last characters."
+	case strings.Contains(e.Errors, "couldn't find this"):
+		e.Message = "Can't find the event in the relays. Try getting an `nevent1` code with relay hints."
+	case strings.Contains(e.Errors, "invalid bech32 string length"), strings.Contains(e.Errors, "invalid separator"):
+		e.Message = "You have typed a wrong event code, we need a URL path that starts with /npub1, /nprofile1, /nevent1, /naddr1, or something like /name@domain.com (or maybe just /domain.com) or an event id as hex (like /aef8b32af...)"
+	default:
+		e.Message = "I can't give any suggestions to solve the problem.<br> Please tag <a href='/dtonon.com'>daniele</a> and <a href='/fiatjaf.com'>fiatjaf</a> and complain!"
+	}
+	return tmplError
+}
