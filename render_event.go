@@ -59,17 +59,17 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// render npub and nprofile using a separate function
-	if prefix == "npub" || prefix == "nprofile" {
-		// it's a profile
-		renderProfile(w, r, code)
-		return
-	}
-
 	// Check if the embed parameter is set to "yes"
 	embedParam := r.URL.Query().Get("embed")
 	if embedParam == "yes" {
 		renderEmbedded(w, r, code)
+		return
+	}
+
+	// render npub and nprofile using a separate function
+	if prefix == "npub" || prefix == "nprofile" {
+		// it's a profile
+		renderProfile(w, r, code)
 		return
 	}
 
@@ -252,10 +252,10 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		data.content = strings.ReplaceAll(data.content, placeholderTag, "nostr:"+nreplace)
 	}
 	if data.event.Kind == 30023 || data.event.Kind == 30024 {
-		data.content = mdToHTML(data.content, data.templateId == TelegramInstantView)
+		data.content = mdToHTML(data.content, data.templateId == TelegramInstantView, false)
 	} else {
 		// first we run basicFormatting, which turns URLs into their appropriate HTML tags
-		data.content = basicFormatting(html.EscapeString(data.content), true, false)
+		data.content = basicFormatting(html.EscapeString(data.content), true, false, false)
 		// then we render quotes as HTML, which will also apply basicFormatting to all the internal quotes
 		data.content = renderQuotesAsHTML(r.Context(), data.content, data.templateId == TelegramInstantView)
 		// we must do this because inside <blockquotes> we must treat <img>s differently when telegram_instant_view

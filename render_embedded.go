@@ -30,10 +30,10 @@ func renderEmbedded(w http.ResponseWriter, r *http.Request, code string) {
 	}
 
 	if data.event.Kind == 30023 || data.event.Kind == 30024 {
-		data.content = mdToHTML(data.content, data.templateId == TelegramInstantView)
+		data.content = mdToHTML(data.content, data.templateId == TelegramInstantView, true)
 	} else {
 		// first we run basicFormatting, which turns URLs into their appropriate HTML tags
-		data.content = basicFormatting(html.EscapeString(data.content), true, false)
+		data.content = basicFormatting(html.EscapeString(data.content), true, false, false)
 		// then we render quotes as HTML, which will also apply basicFormatting to all the internal quotes
 		data.content = renderQuotesAsHTML(r.Context(), data.content, data.templateId == TelegramInstantView)
 		// we must do this because inside <blockquotes> we must treat <img>s differently when telegram_instant_view
@@ -51,6 +51,15 @@ func renderEmbedded(w http.ResponseWriter, r *http.Request, code string) {
 			Url:       code,
 		})
 
+	case Profile:
+		err = EmbeddedProfileTemplate.Render(w, &EmbeddedProfilePage{
+			Metadata:                   data.metadata,
+			NormalizedAuthorWebsiteURL: normalizeWebsiteURL(data.metadata.Website),
+			RenderedAuthorAboutText:    template.HTML(basicFormatting(html.EscapeString(data.metadata.About), false, false, true)),
+			Npub:                       data.npub,
+			Nprofile:                   data.nprofile,
+			AuthorRelays:               data.authorRelays,
+		})
 	default:
 		log.Error().Int("templateId", int(data.templateId)).Msg("no way to render")
 		http.Error(w, "tried to render an unsupported template at render_event.go", 500)
