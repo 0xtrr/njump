@@ -68,8 +68,8 @@ github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1m
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/fasthttp/websocket v1.5.3 h1:TPpQuLwJYfd4LJPXvHDYPMFWbLjsT91n3GpWtCQtdek=
 github.com/fasthttp/websocket v1.5.3/go.mod h1:46gg/UBmTU1kUaTcwQXpUxtRwG2PvIZYeA8oL6vF3Fs=
-github.com/fiatjaf/eventstore v0.2.6 h1:ulKmQhYnJXOEBDJQzbq6p9lJY4HhbIx5OCmGRJ5uVrE=
-github.com/fiatjaf/eventstore v0.2.6/go.mod h1:Zx1XqwICh7RxxKLkgc0aXlVo298ABs4W5awP/1/bYYs=
+github.com/fiatjaf/eventstore v0.2.13 h1:Pow501WjZVtfVug8PHJAlgw4um3bGe1iQ2GxbFZgaN8=
+github.com/fiatjaf/eventstore v0.2.13/go.mod h1:CDzb0tH0Buw2TrKQ4Bpvwg3F6ITvLsk+pmp0tACNUlw=
 github.com/fiatjaf/khatru v0.0.6 h1:6d5gnKdgsaHD+NZFzsVp22nqxnGxtlLLR8gYVea6KBU=
 github.com/fiatjaf/khatru v0.0.6/go.mod h1:gvfXhDel30t84mkWk5aDwBRD1N8py4RixIwGD0i+LMY=
 github.com/fogleman/gg v1.3.0 h1:/7zJX8F6AaYQc57WQCyN9cAIz+4bCJGO9B+dyW29am8=
@@ -109,8 +109,6 @@ github.com/golang/protobuf v1.5.3 h1:KhyjKVUg7Usr/dYsdSqoFveMYd5ko72D+zANwlG1mmg
 github.com/golang/protobuf v1.5.3/go.mod h1:XVQd3VNwM+JqD3oG2Ue2ip4fOMUkwXdXDdiuN0vRsmY=
 github.com/golang/snappy v0.0.4 h1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=
 github.com/golang/snappy v0.0.4/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
-github.com/gomarkdown/markdown v0.0.0-20230322041520-c84983bdbf2a h1:AWZzzFrqyjYlRloN6edwTLTUbKxf5flLXNuTBDm3Ews=
-github.com/gomarkdown/markdown v0.0.0-20230322041520-c84983bdbf2a/go.mod h1:JDGcbDT52eL4fju3sZ4TeHGsQwhG9nbDV21aMyhwPoA=
 github.com/gomarkdown/markdown v0.0.0-20231115200524-a660076da3fd h1:PppHBegd3uPZ3Y/Iax/2mlCFJm1w4Qf/zP1MdW4ju2o=
 github.com/gomarkdown/markdown v0.0.0-20231115200524-a660076da3fd/go.mod h1:JDGcbDT52eL4fju3sZ4TeHGsQwhG9nbDV21aMyhwPoA=
 github.com/google/flatbuffers v23.5.26+incompatible h1:M9dgRyhJemaM4Sw8+66GHBu8ioaQmyPLg1b8VwK5WJg=
@@ -152,8 +150,8 @@ github.com/mattn/go-isatty v0.0.14 h1:yVuAays6BHfxijgZPzw+3Zlu5yQgKGP2/hcQbHb7S9
 github.com/mattn/go-isatty v0.0.14/go.mod h1:7GGIvUiUoEMVVmxf/4nioHXj79iQHKdU27kJ6hsGG94=
 github.com/microcosm-cc/bluemonday v1.0.24 h1:NGQoPtwGVcbGkKfvyYk1yRqknzBuoMiUrO6R7uFTPlw=
 github.com/microcosm-cc/bluemonday v1.0.24/go.mod h1:ArQySAMps0790cHSkdPEJ7bGkF2VePWH773hsJNSHf8=
-github.com/nbd-wtf/go-nostr v0.25.3 h1:RPPh4cOosw0OZi5KG627pZ3GlKxiKsjARluzen/mB9g=
-github.com/nbd-wtf/go-nostr v0.25.3/go.mod h1:bkffJI+x914sPQWum9ZRUn66D7NpDnAoWo1yICvj3/0=
+github.com/nbd-wtf/go-nostr v0.26.4 h1:C5AXvMaRZactznfjfvscciUFypCJT6AYYGpyQqRAQxQ=
+github.com/nbd-wtf/go-nostr v0.26.4/go.mod h1:bkffJI+x914sPQWum9ZRUn66D7NpDnAoWo1yICvj3/0=
 github.com/nbd-wtf/nostr-sdk v0.0.4 h1:vMCiYpFElKMHPXpZjFVEq4utoTLdTYbkqXVYH1/4uzs=
 github.com/nbd-wtf/nostr-sdk v0.0.4/go.mod h1:KQZOtzcrXBlVhpZYG1tw83ADIONNMMPjUU3ZAH5U2RY=
 github.com/nxadm/tail v1.4.4/go.mod h1:kenIhsEOeOJmVchQTgglprH7qJGnHDVpk1VPCcaMI8A=

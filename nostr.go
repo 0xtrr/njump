@@ -18,9 +18,6 @@ var (
 	pool   = nostr.NewSimplePool(context.Background())
 	serial int
 
-	always = []string{
-		"wss://relay.nostr.band",
-	}
 	everything = []string{
 		"wss://nostr-pub.wellorder.net",
 		"wss://saltivka.org",
@@ -33,10 +30,16 @@ var (
 		"wss://relay.snort.social",
 		"wss://offchain.pub",
 		"wss://relay.primal.net",
+		"wss://relay.nostr.band",
 		"wss://public.relaying.io",
 	}
 	profiles = []string{
 		"wss://purplepag.es",
+		"wss://relay.noswhere.com",
+	}
+	justIds = []string{
+		"wss://cache2.primal.net/v1",
+		"wss://relay.noswhere.com",
 	}
 
 	trustedPubKeys = []string{
@@ -78,7 +81,6 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 	var filter nostr.Filter
 	relays := make([]string, 0, 25)
 	relays = append(relays, relayHints...)
-	relays = append(relays, always...)
 
 	switch v := data.(type) {
 	case nostr.ProfilePointer:
@@ -91,8 +93,8 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 	case nostr.EventPointer:
 		author = v.Author
 		filter.IDs = []string{v.ID}
-		relays = append(relays, getRandomRelay(), getRandomRelay())
 		relays = append(relays, v.Relays...)
+		relays = append(relays, justIds...)
 		withRelays = true
 	case nostr.EntityPointer:
 		author = v.PublicKey
@@ -109,7 +111,8 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 	case string:
 		if prefix == "note" {
 			filter.IDs = []string{v}
-			relays = append(relays, getRandomRelay(), getRandomRelay(), getRandomRelay())
+			relays = append(relays, getRandomRelay())
+			relays = append(relays, justIds...)
 		} else if prefix == "npub" {
 			author = v
 			filter.Authors = []string{v}
@@ -293,12 +296,11 @@ func relaysForPubkey(ctx context.Context, pubkey string, extraRelays ...string) 
 			cache.SetJSONWithTTL("io:"+pubkey, pubkeyRelays, time.Hour*24*7)
 		}
 	}
-	pubkeyRelays = unique(pubkeyRelays)
-	return pubkeyRelays
+	return unique(pubkeyRelays)
 }
 
 func contactsForPubkey(ctx context.Context, pubkey string, extraRelays ...string) []string {
-	pubkeyContacts := make([]string, 0, 100)
+	pubkeyContacts := make([]string, 0, 300)
 	relays := make([]string, 0, 12)
 	if ok := cache.GetJSON("cc:"+pubkey, &pubkeyContacts); !ok {
 		log.Debug().Msgf("searching contacts for %s", pubkey)
@@ -306,7 +308,6 @@ func contactsForPubkey(ctx context.Context, pubkey string, extraRelays ...string
 
 		pubkeyRelays := relaysForPubkey(ctx, pubkey, relays...)
 		relays = append(relays, pubkeyRelays...)
-		relays = append(relays, always...)
 		relays = append(relays, profiles...)
 
 		ch := pool.SubManyEose(ctx, relays, nostr.Filters{
@@ -339,6 +340,5 @@ func contactsForPubkey(ctx context.Context, pubkey string, extraRelays ...string
 			cache.SetJSONWithTTL("cc:"+pubkey, pubkeyContacts, time.Hour*6)
 		}
 	}
-	pubkeyContacts = unique(pubkeyContacts)
-	return pubkeyContacts
+	return unique(pubkeyContacts)
 }
