@@ -125,7 +125,9 @@ var (
 )
 
 //tmpl:bind footer.html
-type FooterPartial struct{}
+type FooterPartial struct {
+	BigImage string
+}
 
 func (*FooterPartial) TemplateText() string { return tmplFooter }
 
@@ -286,6 +288,18 @@ type ProfilePage struct {
 }
 
 func (*ProfilePage) TemplateText() string { return tmplProfile }
+
+var (
+	//go:embed templates/_last_notes.html
+	tmplLastNotes     string
+	LastNotesTemplate = tmpl.MustCompile(&LastNotesPage{})
+)
+
+type LastNotesPage struct {
+	LastNotes []EnhancedEvent
+}
+
+func (*LastNotesPage) TemplateText() string { return tmplLastNotes }
 
 var (
 	//go:embed templates/embedded_profile.html

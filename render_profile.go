@@ -23,6 +23,12 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 		isRSS = true
 	}
 
+	isLastNotes := false
+	if strings.HasPrefix(code, "profile-last-notes") {
+		code = code[19:]
+		isLastNotes = true
+	}
+
 	data, err := grabData(r.Context(), code, isSitemap)
 	if err != nil {
 		w.Header().Set("Cache-Control", "max-age=60")
@@ -35,12 +41,9 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 		return
 	}
 
-	if len(data.renderableLastNotes) != 0 {
-		w.Header().Set("Cache-Control", "max-age=3600")
-	}
-
 	if isSitemap {
 		w.Header().Add("content-type", "text/xml")
+		w.Header().Set("Cache-Control", "max-age=86400")
 		w.Write([]byte(XML_HEADER))
 		SitemapTemplate.Render(w, &SitemapPage{
 			Host:       s.Domain,
@@ -50,6 +53,7 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 		})
 	} else if isRSS {
 		w.Header().Add("content-type", "text/xml")
+		w.Header().Set("Cache-Control", "max-age=86400")
 		w.Write([]byte(XML_HEADER))
 		RSSTemplate.Render(w, &RSSPage{
 			Host:       s.Domain,
@@ -58,8 +62,17 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 			Metadata:   data.metadata,
 			LastNotes:  data.renderableLastNotes,
 		})
+	} else if isLastNotes {
+		w.Header().Add("content-type", "text/html")
+		if len(data.renderableLastNotes) != 0 {
+			w.Header().Set("Cache-Control", "max-age=3600")
+		}
+		LastNotesTemplate.Render(w, &LastNotesPage{
+			LastNotes: data.renderableLastNotes,
+		})
 	} else {
 		w.Header().Add("content-type", "text/html")
+		w.Header().Set("Cache-Control", "max-age=86400")
 		err = ProfileTemplate.Render(w, &ProfilePage{
 			HeadCommonPartial: HeadCommonPartial{IsProfile: true, TailwindDebugStuff: tailwindDebugStuff},
 			DetailsPartial: DetailsPartial{
@@ -71,7 +84,7 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 				Kind:            data.event.Kind,
 			},
 			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(getPreviewStyle(r), data.nprofile, data.event),
+				Clients: generateClientList(data.nprofile, data.event),
 			},
 
 			Metadata:                   data.metadata,
