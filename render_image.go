@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -16,13 +18,15 @@ import (
 	"github.com/apatters/go-wordwrap"
 	"github.com/fogleman/gg"
 	"github.com/golang/freetype/truetype"
+	sdk "github.com/nbd-wtf/nostr-sdk"
+	"github.com/nfnt/resize"
 	"golang.org/x/image/font"
 )
 
 const (
 	MAX_LINES                = 20
-	MAX_CHARS_PER_LINE       = 52
-	MAX_CHARS_PER_QUOTE_LINE = 48
+	MAX_CHARS_PER_LINE       = 50
+	MAX_CHARS_PER_QUOTE_LINE = 46
 	FONT_SIZE                = 7
 	FONT_DPI                 = 260
 
@@ -30,8 +34,9 @@ const (
 )
 
 var (
-	BACKGROUND = color.RGBA{23, 23, 23, 255}
-	FOREGROUND = color.RGBA{255, 230, 238, 255}
+	BACKGROUND     = color.RGBA{23, 23, 23, 255}
+	BAR_BACKGROUND = color.RGBA{10, 10, 10, 255}
+	FOREGROUND     = color.RGBA{255, 230, 238, 255}
 )
 
 //go:embed fonts/*
@@ -46,30 +51,33 @@ func renderImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, _, err := getEvent(r.Context(), code, nil)
+	data, err := grabData(r.Context(), code, false)
 	if err != nil {
 		http.Error(w, "error fetching event: "+err.Error(), 404)
 		return
 	}
 
 	// get the font and language specifics based on the characters used
-	font, breakWords, err := getLanguage(event.Content)
+	font, breakWords, err := getLanguage(data.event.Content)
 	if err != nil {
 		http.Error(w, "error getting font: "+err.Error(), 500)
 		return
 	}
 
+	content := strings.Replace(data.event.Content, "\n\n\n\n", "\n\n", -1)
+	content = strings.Replace(data.event.Content, "\n\n\n", "\n\n", -1)
+
 	// this turns the raw event.Content into a series of lines ready to drawn
 	lines := normalizeText(
 		replaceUserReferencesWithNames(r.Context(),
 			renderQuotesAsBlockPrefixedText(r.Context(),
-				event.Content,
+				content,
 			),
 		),
 		breakWords,
 	)
 
-	img, err := drawImage(lines, font, getPreviewStyle(r))
+	img, err := drawImage(lines, font, getPreviewStyle(r), data.metadata, data.createdAt)
 	if err != nil {
 		log.Printf("error writing image: %s", err)
 		http.Error(w, "error writing image!", 500)
@@ -91,6 +99,7 @@ func normalizeText(input []string, breakWords bool) []string {
 	l := 0 // global line counter
 
 	for _, block := range input {
+		block := strings.TrimRight(block, "\n")
 		quoting := false
 		maxChars := MAX_CHARS_PER_LINE
 		if strings.HasPrefix(block, BLOCK+" ") {
@@ -159,16 +168,65 @@ func normalizeText(input []string, breakWords bool) []string {
 	return lines
 }
 
-func drawImage(lines []string, ttf *truetype.Font, style Style) (image.Image, error) {
+func fetchImageFromURL(url string) (image.Image, error) {
+	response, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	img, _, err := image.Decode(response.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return img, nil
+}
+
+func roundImage(img image.Image) image.Image {
+	bounds := img.Bounds()
+	diameter := math.Min(float64(bounds.Dx()), float64(bounds.Dy()))
+	radius := diameter / 2
+
+	// Create a new context for the mask
+	mask := gg.NewContext(bounds.Dx(), bounds.Dy())
+	mask.SetColor(color.Black) // Set the mask color to fully opaque
+	mask.DrawCircle(float64(bounds.Dx())/2, float64(bounds.Dy())/2, radius)
+	mask.ClosePath()
+	mask.Fill()
+
+	// Apply the circular mask to the original image
+	result := image.NewRGBA(bounds)
+	maskImg := mask.Image()
+	draw.DrawMask(result, bounds, img, image.Point{}, maskImg, image.Point{}, draw.Over)
+
+	return result
+}
+
+func cropToSquare(img image.Image) image.Image {
+	bounds := img.Bounds()
+	size := int(math.Min(float64(bounds.Dx()), float64(bounds.Dy())))
+	squareImg := image.NewRGBA(image.Rect(0, 0, size, size))
+	for x := 0; x < size; x++ {
+		for y := 0; y < size; y++ {
+			squareImg.Set(x, y, img.At(x+(bounds.Dx()-size)/2, y+(bounds.Dy()-size)/2))
+		}
+	}
+	return squareImg
+}
+
+func drawImage(lines []string, ttf *truetype.Font, style Style, metadata sdk.ProfileMetadata, date string) (image.Image, error) {
 	width := 700
 	height := 525
-	paddingLeft := 5
+	paddingLeft := 25
+	barExtraPadding := 5
 	switch style {
 	case StyleTelegram:
 		paddingLeft += 10
 		width -= 10
 	case StyleTwitter:
 		height = width * 268 / 512
+		barExtraPadding = 105
 	}
 
 	img := gg.NewContext(width, height)
@@ -181,25 +239,78 @@ func drawImage(lines []string, ttf *truetype.Font, style Style) (image.Image, er
 		Hinting: font.HintingFull,
 	}))
 
+	// Draw note text
 	lineSpacing := 0.3
 	lineHeight := float64(FONT_SIZE)*FONT_DPI/72.0 + float64(FONT_SIZE)*lineSpacing*FONT_DPI/72.0
 	for i, line := range lines {
-		y := float64(i)*lineHeight + 50                  // Calculate the Y position for each line
-		img.DrawString(line, float64(20+paddingLeft), y) // Draw the line at the calculated Y position
+		y := float64(i)*lineHeight + 50               // Calculate the Y position for each line
+		img.DrawString(line, float64(paddingLeft), y) // Draw the line at the calculated Y position
 	}
 
-	// create the stamp image
+	// Draw black bar at the bottom
+	barHeight := 70
+	img.SetColor(BAR_BACKGROUND)
+	img.DrawRectangle(0, float64(height-barHeight), float64(width), float64(barHeight))
+	img.Fill()
+
+	// Create a rectangle at the bottom with a gradient from black to transparent
+	gradientRectHeight := 140
+	gradientRectY := height - barHeight - gradientRectHeight
+	for y := 0; y < gradientRectHeight; y++ {
+		alpha := uint8(255 * (math.Pow(float64(y)/float64(gradientRectHeight), 2)))
+		img.SetRGBA255(int(BACKGROUND.R), int(BACKGROUND.G), int(BACKGROUND.B), int(alpha))
+		img.DrawRectangle(0, float64(gradientRectY+y), float64(width), 1)
+		img.Fill()
+	}
+
+	// Draw author's image from URL
+	authorTextX := paddingLeft + barExtraPadding
+	if metadata.Picture != "" {
+		authorImage, err := fetchImageFromURL(metadata.Picture)
+		if err == nil {
+			resizedAuthorImage := resize.Resize(uint(barHeight-20), uint(barHeight-20), roundImage(cropToSquare(authorImage)), resize.Lanczos3)
+			img.DrawImage(resizedAuthorImage, paddingLeft+barExtraPadding, height-barHeight+10)
+			authorTextX += 65
+		}
+	}
+
+	// Draw author's name
+	authorTextY := height - barHeight + 20
+	authorMaxWidth := width/2.0 - paddingLeft*2 - barExtraPadding
+	img.SetColor(color.White)
+	img.DrawStringWrapped(metadata.ShortName(), float64(authorTextX), float64(authorTextY), 0, 0, float64(width*99), 99, gg.AlignLeft)
+
+	// Create a gradient to cover too long names
+	img.SetColor(BAR_BACKGROUND)
+	img.DrawRectangle(float64(authorTextX+authorMaxWidth), float64(height-barHeight), float64(width-authorTextX-authorMaxWidth), float64(barHeight))
+	gradientLenght := 60
+	for x := 0; x < gradientLenght; x++ {
+		alpha := uint8(255 - 255*(math.Pow(float64(x)/float64(gradientLenght), 2)))
+		img.SetRGBA255(int(BAR_BACKGROUND.R), int(BAR_BACKGROUND.G), int(BAR_BACKGROUND.B), int(alpha))
+		img.DrawRectangle(float64(authorTextX+authorMaxWidth-x), float64(height-barHeight), 1, float64(barHeight))
+		img.Fill()
+	}
+
+	// Draw the logo
 	logo, _ := static.ReadFile("static/logo.png")
 	stampImg, _ := png.Decode(bytes.NewBuffer(logo))
 	stampWidth := stampImg.Bounds().Dx()
 	stampHeight := stampImg.Bounds().Dy()
-
-	// Calculate the position for the stamp in the bottom right corner
-	stampX := width - stampWidth - 20
+	stampX := width - stampWidth - paddingLeft
 	stampY := height - stampHeight - 20
-
-	// Draw the stamp onto the image
 	img.DrawImage(stampImg, stampX, stampY)
+
+	// Draw event date
+	layout := "2006-01-02 15:04:05"
+	parsedTime, _ := time.Parse(layout, date)
+	formattedDate := parsedTime.Format("Jan 02, 2006")
+	img.SetFontFace(truetype.NewFace(ttf, &truetype.Options{
+		Size:    FONT_SIZE - 1,
+		DPI:     FONT_DPI,
+		Hinting: font.HintingFull,
+	}))
+	img.SetColor(color.RGBA{160, 160, 160, 255})
+	img.DrawStringWrapped(formattedDate, float64(width-paddingLeft-stampWidth-260), float64(authorTextY+3), 0, 0, float64(240), 1.5, gg.AlignRight)
 
 	return img.Image(), nil
 }

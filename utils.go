@@ -9,7 +9,6 @@ import (
 	"html/template"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -39,8 +38,8 @@ var (
 		xurls.SchemesUnofficial = []string{"http"}
 		return xurls.Strict()
 	}()
-	imageExtensionMatcher = regexp.MustCompile(`.*\.(png|jpg|jpeg|gif|webp)(\?.*)?$`)
-	videoExtensionMatcher = regexp.MustCompile(`.*\.(mp4|ogg|webm|mov)(\?.*)?$`)
+	imageExtensionMatcher = regexp.MustCompile(`.*\.(png|jpg|jpeg|gif|webp)((\?|\#).*)?$`)
+	videoExtensionMatcher = regexp.MustCompile(`.*\.(mp4|ogg|webm|mov)((\?|\#).*)?$`)
 )
 
 var kindNames = map[int]string{
@@ -195,9 +194,10 @@ func attachRelaysToEvent(eventId string, relays ...string) []string {
 	// cleanup
 	filtered := make([]string, 0, len(relays))
 	for _, relay := range relays {
-		if !isntRealRelay(relay) {
-			filtered = append(filtered, relay)
+		if isntRealRelay(relay) {
+			continue
 		}
+		filtered = append(filtered, relay)
 	}
 
 	cache.SetJSONWithTTL(key, filtered, time.Hour*24*7)
@@ -484,25 +484,6 @@ func humanDate(createdAt nostr.Timestamp) string {
 	}
 }
 
-func shouldUseRelayForNip19(relayUrl string) bool {
-	for _, excluded := range excludedRelays {
-		if strings.Contains(relayUrl, excluded) {
-			return false
-		}
-	}
-	urlp, err := url.Parse(relayUrl)
-	if err != nil {
-		return false
-	}
-	if urlp.Scheme != "wss" && urlp.Scheme != "ws" {
-		return false
-	}
-	if urlp.Path != "" && urlp.Path != "/" {
-		return false
-	}
-	return true
-}
-
 func getRandomRelay() string {
 	if serial == 0 {
 		serial = rand.Intn(len(everything))
@@ -514,11 +495,6 @@ func getRandomRelay() string {
 func isntRealRelay(url string) bool {
 	if len(url) < 6 {
 		// this is just invalid
-		return true
-	}
-
-	// hardcoded
-	if url == "wss://relay.noswhere.com" {
 		return true
 	}
 
