@@ -12,10 +12,21 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/a-h/templ"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip05"
 	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/pelletier/go-toml"
 )
+
+func isValidShortcode(s string) bool {
+	for _, r := range s {
+		if !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
 
 func renderEvent(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Path[1:] // hopefully a nip19 code
@@ -32,11 +43,6 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.HasPrefix(code, "profile-last-notes") {
-		renderProfile(w, r, code)
-		return
-	}
-
 	// decode the nip19 code we've received
 	prefix, decoded, err := nip19.Decode(code)
 	if err != nil {
@@ -48,19 +54,15 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// it may be a NIP-05
-		if strings.Contains(code, ".") {
+		if nip05.IsValidIdentifier(code) {
 			renderProfile(w, r, code)
 			return
 		}
 
 		// otherwise error
 		w.Header().Set("Cache-Control", "max-age=60")
-		errorPage := &ErrorPage{
-			Errors: err.Error(),
-		}
-		errorPage.TemplateText()
 		w.WriteHeader(http.StatusNotFound)
-		ErrorTemplate.Render(w, errorPage)
+		errorTemplate(ErrorPageParams{Errors: err.Error()}).Render(r.Context(), w)
 		return
 	}
 
@@ -82,18 +84,14 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 	data, err := grabData(r.Context(), code, false)
 	if err != nil {
 		w.Header().Set("Cache-Control", "max-age=60")
-		errorPage := &ErrorPage{
-			Errors: err.Error(),
-		}
-		errorPage.TemplateText()
 		w.WriteHeader(http.StatusNotFound)
-		ErrorTemplate.Render(w, errorPage)
+		errorTemplate(ErrorPageParams{Errors: err.Error()}).Render(r.Context(), w)
 		return
 	}
 
 	// if the result is a kind:0 render this as a profile
 	if data.event.Kind == 0 {
-		renderProfile(w, r, data.npub)
+		renderProfile(w, r, data.metadata.Npub())
 		return
 	}
 
@@ -153,7 +151,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		useTextImage = false
 	}
 
-	title := ""
+	subscript := ""
 	if data.event.Kind >= 30000 && data.event.Kind < 40000 {
 		tValue := "~"
 		for _, tag := range data.event.Tags {
@@ -162,20 +160,23 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		title = fmt.Sprintf("%s: %s", kindNames[data.event.Kind], tValue)
+		subscript = fmt.Sprintf("%s: %s", kindNames[data.event.Kind], tValue)
 	} else if kindName, ok := kindNames[data.event.Kind]; ok {
-		title = kindName
+		subscript = kindName
 	} else {
-		title = fmt.Sprintf("kind:%d event", data.event.Kind)
+		subscript = fmt.Sprintf("kind:%d event", data.event.Kind)
 	}
 	if subject != "" {
-		title += " (" + subject + ")"
+		subscript += " (" + subject + ")"
 	}
-	title += " by " + data.authorShort
+	subscript += " by " + data.metadata.ShortName()
+	if data.event.isReply() {
+		subscript += " (reply)"
+	}
 
 	seenOnRelays := ""
-	if len(data.relays) > 0 {
-		seenOnRelays = fmt.Sprintf("seen on %s", strings.Join(data.relays, ", "))
+	if len(data.event.relays) > 0 {
+		seenOnRelays = fmt.Sprintf("seen on %s", strings.Join(data.event.relays, ", "))
 	}
 
 	textImageURL := ""
@@ -202,7 +203,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// otherwise replace npub/nprofiles with names and trim length
-			description = replaceUserReferencesWithNames(r.Context(), []string{data.event.Content})[0]
+			description = replaceUserReferencesWithNames(r.Context(), []string{data.event.Content}, "", "")[0]
 			if len(description) > 240 {
 				description = description[:240]
 			}
@@ -213,7 +214,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 	titleizedContent := strings.TrimSpace(
 		strings.Replace(
 			strings.Replace(
-				replaceUserReferencesWithNames(r.Context(), []string{data.event.Content})[0],
+				replaceUserReferencesWithNames(r.Context(), []string{data.event.Content}, "", "")[0],
 				"\r\n", " ", -1),
 			"\n", " ", -1,
 		),
@@ -224,7 +225,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 	titleizedContent = urlRegex.ReplaceAllString(titleizedContent, "")
 
 	if titleizedContent == "" {
-		titleizedContent = title
+		titleizedContent = subscript
 	}
 
 	if len(titleizedContent) > 85 {
@@ -290,23 +291,18 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Link", "<"+oembed+"&format=xml>; rel=\"alternate\"; type=\"text/xml+oembed\"")
 	}
 
-	detailsData := DetailsPartial{
+	detailsData := DetailsParams{
 		HideDetails:     true,
 		CreatedAt:       data.createdAt,
 		KindDescription: data.kindDescription,
 		KindNIP:         data.kindNIP,
-		EventJSON:       eventToHTML(data.event),
+		EventJSON:       data.event.ToJSONHTML(),
 		Kind:            data.event.Kind,
-		SeenOn:          data.relays,
-		Npub:            data.npub,
-		Nprofile:        data.nprofile,
-
-		// kind-specific stuff
-		FileMetadata: data.kind1063Metadata,
-		LiveEvent:    data.kind30311Metadata,
+		SeenOn:          data.event.relays,
+		Metadata:        data.metadata,
 	}
 
-	opengraph := OpenGraphPartial{
+	opengraph := OpenGraphParams{
 		BigImage:     textImageURL,
 		Image:        data.image,
 		Video:        data.video,
@@ -314,30 +310,37 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		ProxiedImage: "https://" + host + "/njump/proxy?src=" + data.image,
 
 		Superscript: data.authorLong,
-		Subscript:   title,
+		Subscript:   subscript,
 		Text:        strings.TrimSpace(description),
+	}
+
+	var component templ.Component
+	baseEventPageParams := BaseEventPageParams{
+		Event:    data.event,
+		Metadata: data.metadata,
+		Style:    style,
+		Alt:      data.alt,
 	}
 
 	switch data.templateId {
 	case TelegramInstantView:
-		err = TelegramInstantViewTemplate.Render(w, &TelegramInstantViewPage{
-			Video:       data.video,
-			VideoType:   data.videoType,
-			Image:       data.image,
-			Summary:     template.HTML(summary),
-			Content:     template.HTML(data.content),
-			Description: description,
-			Subject:     subject,
-			Metadata:    data.metadata,
-			AuthorLong:  data.authorLong,
-			CreatedAt:   data.createdAt,
-			ParentLink:  data.parentLink,
+		component = telegramInstantViewTemplate(TelegramInstantViewParams{
+			Video:        data.video,
+			VideoType:    data.videoType,
+			Image:        data.image,
+			Summary:      template.HTML(summary),
+			Content:      template.HTML(data.content),
+			Description:  description,
+			Subject:      subject,
+			Metadata:     data.metadata,
+			AuthorLong:   data.authorLong,
+			CreatedAt:    data.createdAt,
+			ParentNevent: data.event.getParentNevent(),
 		})
 	case Note:
 		if style == StyleTwitter {
-			// twitter only uses one title, so we ensure it is this
-			// we can't set this for other platforms as some will reuse stuff from twitter-specific tags
-			opengraph.SingleTitle = "by " + data.authorShort + " at " + humanDate(data.event.CreatedAt)
+			// twitter has started sprinkling this over our image, so let's make it invisible
+			opengraph.SingleTitle = string(INVISIBLE_SPACE)
 		}
 
 		if opengraph.BigImage == "" && style != StyleTwitter && strings.HasSuffix(opengraph.Text, opengraph.Image) {
@@ -354,138 +357,161 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 			enhancedCode = data.naddr
 		}
 
-		err = NoteTemplate.Render(w, &NotePage{
-			OpenGraphPartial: opengraph,
-			HeadCommonPartial: HeadCommonPartial{
-				IsProfile:          false,
-				Oembed:             oembed,
-				TailwindDebugStuff: tailwindDebugStuff,
-				NaddrNaked:         data.naddrNaked,
-				NeventNaked:        data.neventNaked,
-			},
-			DetailsPartial: detailsData,
-			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(enhancedCode, data.event),
-			},
-			FooterPartial: FooterPartial{
-				BigImage: opengraph.BigImage,
+		content := data.content
+		for _, tag := range data.event.Tags.GetAll([]string{"emoji"}) {
+			// custom emojis
+			if len(tag) >= 3 && isValidShortcode(tag[1]) {
+				u, err := url.Parse(tag[2])
+				if err == nil {
+					content = strings.ReplaceAll(content, ":"+tag[1]+":", `<img class="h-[29px] inline m-0" src="`+u.String()+`" alt=":`+tag[1]+`:"/>`)
+				}
+			}
+		}
+		component = noteTemplate(NotePageParams{
+			BaseEventPageParams: baseEventPageParams,
+			OpenGraphParams:     opengraph,
+			HeadParams: HeadParams{
+				IsProfile:   false,
+				Oembed:      oembed,
+				NaddrNaked:  data.naddrNaked,
+				NeventNaked: data.neventNaked,
 			},
 
-			Content:          template.HTML(data.content),
-			CreatedAt:        data.createdAt,
-			Metadata:         data.metadata,
-			Npub:             data.npub,
-			NpubShort:        data.npubShort,
-			ParentLink:       data.parentLink,
+			Clients:          generateClientList(data.event.Kind, enhancedCode),
+			Details:          detailsData,
+			Content:          template.HTML(content),
 			Subject:          subject,
 			TitleizedContent: titleizedContent,
 		})
 	case FileMetadata:
 		opengraph.Image = data.kind1063Metadata.DisplayImage()
-
-		err = FileMetadataTemplate.Render(w, &FileMetadataPage{
-			OpenGraphPartial: opengraph,
-			HeadCommonPartial: HeadCommonPartial{
-				IsProfile:          false,
-				TailwindDebugStuff: tailwindDebugStuff,
-				NaddrNaked:         data.naddrNaked,
-				NeventNaked:        data.neventNaked,
-			},
-			DetailsPartial: detailsData,
-			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(data.nevent, data.event),
+		params := FileMetadataPageParams{
+			BaseEventPageParams: baseEventPageParams,
+			OpenGraphParams:     opengraph,
+			HeadParams: HeadParams{
+				IsProfile:   false,
+				NaddrNaked:  data.naddrNaked,
+				NeventNaked: data.neventNaked,
 			},
 
-			CreatedAt:        data.createdAt,
-			Metadata:         data.metadata,
-			Npub:             data.npub,
-			NpubShort:        data.npubShort,
-			Style:            style,
-			Subject:          subject,
-			TitleizedContent: titleizedContent,
-			Alt:              data.alt,
+			Details: detailsData,
+			Clients: generateClientList(data.event.Kind, data.nevent),
 
 			FileMetadata: *data.kind1063Metadata,
 			IsImage:      data.kind1063Metadata.IsImage(),
 			IsVideo:      data.kind1063Metadata.IsVideo(),
-		})
+		}
+		params.Details.Extra = fileMetadataDetails(params)
+
+		component = fileMetadataTemplate(params)
 	case LiveEvent:
 		opengraph.Image = data.kind30311Metadata.Image
-
-		err = LiveEventTemplate.Render(w, &LiveEventPage{
-			OpenGraphPartial: opengraph,
-			HeadCommonPartial: HeadCommonPartial{
-				IsProfile:          false,
-				TailwindDebugStuff: tailwindDebugStuff,
-				NaddrNaked:         data.naddrNaked,
-				NeventNaked:        data.neventNaked,
-			},
-			DetailsPartial: detailsData,
-			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(data.naddr, data.event),
+		component = liveEventTemplate(LiveEventPageParams{
+			BaseEventPageParams: baseEventPageParams,
+			OpenGraphParams:     opengraph,
+			HeadParams: HeadParams{
+				IsProfile:   false,
+				NaddrNaked:  data.naddrNaked,
+				NeventNaked: data.neventNaked,
 			},
 
-			CreatedAt:        data.createdAt,
-			Metadata:         data.metadata,
-			Npub:             data.npub,
-			NpubShort:        data.npubShort,
-			Style:            style,
-			Subject:          subject,
-			TitleizedContent: titleizedContent,
-			Alt:              data.alt,
-
+			Details:   detailsData,
 			LiveEvent: *data.kind30311Metadata,
+			Clients: generateClientList(data.event.Kind, data.naddr,
+				func(c ClientReference, s string) string {
+					if c == nostrudel {
+						s = strings.Replace(s, "/u/", "/streams/", 1)
+					}
+					return s
+				},
+			),
 		})
 	case LiveEventMessage:
-		// opengraph.Image = data.kind1311Metadata.Image
-
-		err = LiveEventMessageTemplate.Render(w, &LiveEventMessagePage{
-			OpenGraphPartial: opengraph,
-			HeadCommonPartial: HeadCommonPartial{
-				IsProfile:          false,
-				TailwindDebugStuff: tailwindDebugStuff,
-				NaddrNaked:         data.naddrNaked,
-				NeventNaked:        data.neventNaked,
-			},
-			DetailsPartial: detailsData,
-			ClientsPartial: ClientsPartial{
-				Clients: generateClientList(data.naddr, data.event),
+		component = liveEventMessageTemplate(LiveEventMessagePageParams{
+			BaseEventPageParams: baseEventPageParams,
+			OpenGraphParams:     opengraph,
+			HeadParams: HeadParams{
+				IsProfile:   false,
+				NaddrNaked:  data.naddrNaked,
+				NeventNaked: data.neventNaked,
 			},
 
+			Details:          detailsData,
 			Content:          template.HTML(data.content),
-			CreatedAt:        data.createdAt,
-			Metadata:         data.metadata,
-			Npub:             data.npub,
-			NpubShort:        data.npubShort,
-			ParentLink:       data.parentLink,
-			Style:            style,
-			Subject:          subject,
 			TitleizedContent: titleizedContent,
-			Alt:              data.alt,
+			Clients:          generateClientList(data.event.Kind, data.naddr),
+		})
+	case CalendarEvent:
+		if data.kind31922Or31923Metadata.Image != "" {
+			opengraph.Image = data.kind31922Or31923Metadata.Image
+		}
 
-			LiveEventMessage: *data.kind1311Metadata,
+		// Fallback for deprecated 'name' field
+		if data.kind31922Or31923Metadata.Title == "" {
+			for _, tag := range data.event.Tags {
+				if tag[0] == "name" {
+					data.kind31922Or31923Metadata.Title = tag[1]
+					break
+				}
+			}
+		}
+
+		var StartAtDate, StartAtTime string
+		StartAtDate = data.kind31922Or31923Metadata.Start.Format("02 Jan 2006")
+		if data.kind31922Or31923Metadata.Start.Hour() != 0 ||
+			data.kind31922Or31923Metadata.Start.Minute() != 0 ||
+			data.kind31922Or31923Metadata.Start.Second() != 0 {
+			StartAtTime = data.kind31922Or31923Metadata.Start.Format("15:04")
+		}
+
+		var EndAtDate, EndAtTime string
+		EndAtDate = data.kind31922Or31923Metadata.End.Format("02 Jan 2006")
+		if data.kind31922Or31923Metadata.End.Hour() != 0 ||
+			data.kind31922Or31923Metadata.End.Minute() != 0 ||
+			data.kind31922Or31923Metadata.End.Second() != 0 {
+			EndAtTime = data.kind31922Or31923Metadata.End.Format("15:04")
+		}
+
+		component = calendarEventTemplate(CalendarPageParams{
+			BaseEventPageParams: baseEventPageParams,
+			OpenGraphParams:     opengraph,
+			HeadParams: HeadParams{
+				IsProfile:   false,
+				NaddrNaked:  data.naddrNaked,
+				NeventNaked: data.neventNaked,
+			},
+
+			StartAtDate:   StartAtDate,
+			StartAtTime:   StartAtTime,
+			EndAtDate:     EndAtDate,
+			EndAtTime:     EndAtTime,
+			CalendarEvent: *data.kind31922Or31923Metadata,
+			Details:       detailsData,
+			Content:       template.HTML(data.content),
+			Clients:       generateClientList(data.event.Kind, data.naddr),
 		})
 	case Other:
 		detailsData.HideDetails = false // always open this since we know nothing else about the event
 
-		err = OtherTemplate.Render(w, &OtherPage{
-			HeadCommonPartial: HeadCommonPartial{
-				IsProfile:          false,
-				TailwindDebugStuff: tailwindDebugStuff,
-				NaddrNaked:         data.naddrNaked,
-				NeventNaked:        data.neventNaked,
+		component = otherTemplate(OtherPageParams{
+			BaseEventPageParams: baseEventPageParams,
+			HeadParams: HeadParams{
+				IsProfile:   false,
+				NaddrNaked:  data.naddrNaked,
+				NeventNaked: data.neventNaked,
 			},
-			DetailsPartial:  detailsData,
-			Alt:             data.alt,
+
+			Details:         detailsData,
 			Kind:            data.event.Kind,
 			KindDescription: data.kindDescription,
 		})
 	default:
 		log.Error().Int("templateId", int(data.templateId)).Msg("no way to render")
 		http.Error(w, "tried to render an unsupported template at render_event.go", 500)
+		return
 	}
 
-	if err != nil {
+	if err := component.Render(r.Context(), w); err != nil {
 		log.Error().Err(err).Msg("error rendering tmpl")
 	}
 	return

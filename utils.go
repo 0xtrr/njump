@@ -3,27 +3,27 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"html"
-	"html/template"
 	"math/rand"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
+	"slices"
+
 	"github.com/microcosm-cc/bluemonday"
-	"golang.org/x/exp/slices"
 	"mvdan.cc/xurls/v2"
 
 	"github.com/nbd-wtf/go-nostr"
-	"github.com/nbd-wtf/go-nostr/nip10"
-	"github.com/nbd-wtf/go-nostr/nip19"
 	sdk "github.com/nbd-wtf/nostr-sdk"
 )
 
-const XML_HEADER = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+const (
+	XML_HEADER      = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+	THIN_SPACE      = '\u2009'
+	INVISIBLE_SPACE = '\U0001D17A'
+)
 
 var (
 	urlSuffixMatcher         = regexp.MustCompile(`[\w-_.]+\.[\w-_.]+(\/[\/\w]*)?$`)
@@ -171,19 +171,6 @@ func getPreviewStyle(r *http.Request) Style {
 	}
 }
 
-func getParentNevent(event *nostr.Event) string {
-	parentNevent := ""
-	replyTag := nip10.GetImmediateReply(event.Tags)
-	if replyTag != nil {
-		var relays []string
-		if (len(*replyTag) > 2) && ((*replyTag)[2] != "") {
-			relays = []string{(*replyTag)[2]}
-		}
-		parentNevent, _ = nip19.EncodeEvent((*replyTag)[1], relays, "")
-	}
-	return parentNevent
-}
-
 func attachRelaysToEvent(eventId string, relays ...string) []string {
 	key := "rls:" + eventId
 	existingRelays := make([]string, 0, 10)
@@ -211,20 +198,15 @@ func getRelaysForEvent(eventId string) []string {
 	return relays
 }
 
-func scheduleEventExpiration(eventId string, ts time.Duration) {
-	key := "ttl:" + eventId
+func scheduleEventExpiration(id string, ts time.Duration) {
+	key := "ttl:" + id
 	nextExpiration := time.Now().Add(ts).Unix()
 	var currentExpiration int64
 	if exists := cache.GetJSON(key, &currentExpiration); exists {
-		if nextExpiration < currentExpiration {
-			return
-		}
+		return
 	}
 	cache.SetJSON(key, nextExpiration)
 }
-
-// Rendering functions
-// ### ### ### ### ### ### ### ### ### ### ###
 
 func replaceURLsWithTags(input string, imageReplacementTemplate, videoReplacementTemplate string, skipLinks bool) string {
 	return urlMatcher.ReplaceAllStringFunc(input, func(match string) string {
@@ -249,19 +231,19 @@ func replaceURLsWithTags(input string, imageReplacementTemplate, videoReplacemen
 	})
 }
 
-func replaceNostrURLsWithTags(matcher *regexp.Regexp, input string) string {
+func replaceNostrURLsWithHTMLTags(matcher *regexp.Regexp, input string) string {
 	// match and replace npup1, nprofile1, note1, nevent1, etc
 	return matcher.ReplaceAllStringFunc(input, func(match string) string {
 		nip19 := match[len("nostr:"):]
-		first_chars := nip19[:8]
-		last_chars := nip19[len(nip19)-4:]
+		firstChars := nip19[:8]
+		lastChars := nip19[len(nip19)-4:]
 		if strings.HasPrefix(nip19, "npub1") || strings.HasPrefix(nip19, "nprofile1") {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*4)
 			defer cancel()
-			name := getNameFromNip19(ctx, nip19)
-			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1"><span>%s</span> (<span class="italic">%s</span>)</a>`, nip19, name, first_chars+"…"+last_chars)
+			name, _ := getNameFromNip19(ctx, nip19)
+			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1"><span>%s</span> (<span class="italic">%s</span>)</a>`, nip19, name, firstChars+"…"+lastChars)
 		} else {
-			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1">%s</a>`, nip19, first_chars+"…"+last_chars)
+			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1">%s</a>`, nip19, firstChars+"…"+lastChars)
 		}
 	})
 }
@@ -270,33 +252,34 @@ func shortenNostrURLs(input string) string {
 	// match and replace npup1, nprofile1, note1, nevent1, etc
 	return nostrEveryMatcher.ReplaceAllStringFunc(input, func(match string) string {
 		nip19 := match[len("nostr:"):]
-		first_chars := nip19[:8]
-		last_chars := nip19[len(nip19)-4:]
+		firstChars := nip19[:8]
+		lastChars := nip19[len(nip19)-4:]
 		if strings.HasPrefix(nip19, "npub1") || strings.HasPrefix(nip19, "nprofile1") {
-			return "@" + first_chars + "…" + last_chars
+			return "@" + firstChars + "…" + lastChars
 		} else {
-			return "#" + first_chars + "…" + last_chars
+			return "#" + firstChars + "…" + lastChars
 		}
 	})
 }
 
-func getNameFromNip19(ctx context.Context, nip19 string) string {
+func getNameFromNip19(ctx context.Context, nip19 string) (string, bool) {
 	author, _, err := getEvent(ctx, nip19, nil)
 	if err != nil {
-		return nip19
+		return nip19, false
 	}
 	metadata, err := sdk.ParseMetadata(author)
 	if err != nil {
-		return nip19
+		return nip19, false
 	}
 	if metadata.Name == "" {
-		return nip19
+		return nip19, false
 	}
-	return metadata.Name
+	return metadata.Name, true
 }
 
 // replaces an npub/nprofile with the name of the author, if possible
-func replaceUserReferencesWithNames(ctx context.Context, input []string) []string {
+// meant to be used when plaintext is expected, not formatted HTML
+func replaceUserReferencesWithNames(ctx context.Context, input []string, prefix, suffix string) []string {
 	// Match and replace npup1 or nprofile1
 	ctx, cancel := context.WithTimeout(ctx, time.Second*3)
 	defer cancel()
@@ -304,8 +287,12 @@ func replaceUserReferencesWithNames(ctx context.Context, input []string) []strin
 	for i, line := range input {
 		input[i] = nostrNpubNprofileMatcher.ReplaceAllStringFunc(line, func(match string) string {
 			submatch := nostrNpubNprofileMatcher.FindStringSubmatch(match)
-			nip19 := submatch[1]
-			return getNameFromNip19(ctx, nip19)
+			nip19code := submatch[1]
+			name, ok := getNameFromNip19(ctx, nip19code)
+			if ok {
+				return prefix + strings.ReplaceAll(name, " ", string(THIN_SPACE))
+			}
+			return nip19code[0:10] + "…" + nip19code[len(nip19code)-5:]
 		})
 	}
 	return input
@@ -335,9 +322,9 @@ func renderQuotesAsHTML(ctx context.Context, input string, usingTelegramInstantV
 func linkQuotes(input string) string {
 	return nostrNoteNeventMatcher.ReplaceAllStringFunc(input, func(match string) string {
 		nip19 := match[len("nostr:"):]
-		first_chars := nip19[:8]
-		last_chars := nip19[len(nip19)-4:]
-		return fmt.Sprintf(`<a href="/%s">%s</a>`, nip19, first_chars+"…"+last_chars)
+		firstChars := nip19[:8]
+		lastChars := nip19[len(nip19)-4:]
+		return fmt.Sprintf(`<a href="/%s">%s</a>`, nip19, firstChars+"…"+lastChars)
 	})
 }
 
@@ -371,7 +358,7 @@ func basicFormatting(input string, skipNostrEventLinks bool, usingTelegramInstan
 	lines := strings.Split(input, "\n")
 	for i, line := range lines {
 		line = replaceURLsWithTags(line, imageReplacementTemplate, videoReplacementTemplate, skipLinks)
-		line = replaceNostrURLsWithTags(nostrMatcher, line)
+		line = replaceNostrURLsWithHTMLTags(nostrMatcher, line)
 		lines[i] = line
 	}
 	return strings.Join(lines, "<br/>")
@@ -422,49 +409,6 @@ func normalizeWebsiteURL(u string) string {
 	return "https://" + u
 }
 
-func eventToHTML(evt *nostr.Event) template.HTML {
-	tagsHTML := "["
-	for t, tag := range evt.Tags {
-		tagsHTML += "\n    ["
-		for i, item := range tag {
-			cls := `"text-zinc-500 dark:text-zinc-50"`
-			if i == 0 {
-				cls = `"text-amber-500 dark:text-amber-200"`
-			}
-			itemJSON, _ := json.Marshal(item)
-			tagsHTML += "\n      <span class=" + cls + ">" + html.EscapeString(string(itemJSON))
-			if i < len(tag)-1 {
-				tagsHTML += ","
-			} else {
-				tagsHTML += "\n    "
-			}
-		}
-		tagsHTML += "]"
-		if t < len(evt.Tags)-1 {
-			tagsHTML += ","
-		} else {
-			tagsHTML += "\n  "
-		}
-	}
-	tagsHTML += "]"
-
-	contentJSON, _ := json.Marshal(evt.Content)
-
-	keyCls := "text-purple-700 dark:text-purple-300"
-
-	return template.HTML(fmt.Sprintf(
-		`{
-  <span class="`+keyCls+`">"id":</span> <span class="text-zinc-500 dark:text-zinc-50">"%s"</span>,
-  <span class="`+keyCls+`">"pubkey":</span> <span class="text-zinc-500 dark:text-zinc-50">"%s"</span>,
-  <span class="`+keyCls+`">"created_at":</span> <span class="text-green-600">%d</span>,
-  <span class="`+keyCls+`">"kind":</span> <span class="text-amber-500 dark:text-amber-200">%d</span>,
-  <span class="`+keyCls+`">"tags":</span> %s,
-  <span class="`+keyCls+`">"content":</span> <span class="text-zinc-500 dark:text-zinc-50">%s</span>,
-  <span class="`+keyCls+`">"sig":</span> <span class="text-zinc-500 dark:text-zinc-50 content">"%s"</span>
-}`, evt.ID, evt.PubKey, evt.CreatedAt, evt.Kind, tagsHTML, html.EscapeString(string(contentJSON)), evt.Sig),
-	)
-}
-
 func limitAt[V any](list []V, n int) []V {
 	if len(list) < n {
 		return list
@@ -486,10 +430,10 @@ func humanDate(createdAt nostr.Timestamp) string {
 
 func getRandomRelay() string {
 	if serial == 0 {
-		serial = rand.Intn(len(everything))
+		serial = rand.Intn(len(relayConfig.Everything))
 	}
-	serial = (serial + 1) % len(everything)
-	return everything[serial]
+	serial = (serial + 1) % len(relayConfig.Everything)
+	return relayConfig.Everything[serial]
 }
 
 func isntRealRelay(url string) bool {
@@ -503,4 +447,27 @@ func isntRealRelay(url string) bool {
 	// and should not be used in computing outbox model relay recommendations
 	substr := []byte(url[6:])
 	return bytes.IndexByte(substr, '/') != -1
+}
+
+func maxIndex(slice []int) int {
+	maxIndex := -1
+	maxVal := 0
+	for i, val := range slice {
+		if val > maxVal {
+			maxVal = val
+			maxIndex = i
+		}
+	}
+	return maxIndex
+}
+
+// clamp ensures val is in the inclusive range [low,high].
+func clamp(val, low, high int) int {
+	if val < low {
+		return low
+	}
+	if val > high {
+		return high
+	}
+	return val
 }

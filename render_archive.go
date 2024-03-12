@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 )
 
 func renderArchive(w http.ResponseWriter, r *http.Request) {
+	fmt.Println(r.URL.Path, "@.", r.Header.Get("user-agent"))
 	code := r.URL.Path[1:]
 	hostname := code[2:]
 	resultsPerPage := 50
@@ -39,6 +41,8 @@ func renderArchive(w http.ResponseWriter, r *http.Request) {
 	area := ""
 	if strings.HasPrefix(r.URL.Path[1:], "npubs-archive") {
 		area = "npubs-archive"
+	} else if strings.HasPrefix(r.URL.Path[1:], "relays-archive") {
+		area = "relays-archive"
 	}
 
 	if area == "npubs-archive" {
@@ -55,10 +59,10 @@ func renderArchive(w http.ResponseWriter, r *http.Request) {
 	data := []string{}
 	for i := 0; i < len(keys); i++ {
 		if area == "npubs-archive" {
-			npub, _ := nip19.EncodePublicKey(keys[i])
+			npub, _ := nip19.EncodePublicKey(keys[i][3:])
 			data = append(data, npub)
 		} else {
-			data = append(data, keys[i])
+			data = append(data, trimProtocol(keys[i][3:]))
 		}
 	}
 
@@ -84,8 +88,8 @@ func renderArchive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !isSitemap {
-		ArchiveTemplate.Render(w, &ArchivePage{
-			HeadCommonPartial: HeadCommonPartial{IsProfile: false, TailwindDebugStuff: tailwindDebugStuff},
+		archiveTemplate(ArchivePageParams{
+			HeadParams: HeadParams{IsProfile: false},
 
 			Title:         title,
 			PathPrefix:    pathPrefix,
@@ -94,7 +98,7 @@ func renderArchive(w http.ResponseWriter, r *http.Request) {
 			PaginationUrl: area,
 			NextPage:      nextPage,
 			PrevPage:      prevPage,
-		})
+		}).Render(r.Context(), w)
 	} else {
 		w.Header().Add("content-type", "text/xml")
 		w.Write([]byte(XML_HEADER))

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -19,18 +20,18 @@ import (
 )
 
 type Settings struct {
-	Port           string `envconfig:"PORT" default:"2999"`
-	Domain         string `envconfig:"DOMAIN" default:"njump.me"`
-	DiskCachePath  string `envconfig:"DISK_CACHE_PATH" default:"/tmp/njump-internal"`
-	EventStorePath string `envconfig:"EVENT_STORE_PATH" default:"/tmp/njump-db"`
-	TailwindDebug  bool   `envconfig:"TAILWIND_DEBUG"`
+	Port              string   `envconfig:"PORT" default:"2999"`
+	Domain            string   `envconfig:"DOMAIN" default:"njump.me"`
+	DiskCachePath     string   `envconfig:"DISK_CACHE_PATH" default:"/tmp/njump-internal"`
+	EventStorePath    string   `envconfig:"EVENT_STORE_PATH" default:"/tmp/njump-db"`
+	TailwindDebug     bool     `envconfig:"TAILWIND_DEBUG"`
+	SkipLanguageModel bool     `envconfig:"SKIP_LANGUAGE_MODEL"`
+	RelayConfigPath   string   `envconfig:"RELAY_CONFIG_PATH"`
+	TrustedPubKeys    []string `envconfig:"TRUSTED_PUBKEYS" default:"7bdef7be22dd8e59f4600e044aa53a1cf975a9dc7d27df5833bc77db784a5805,3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d,97c70a44366a6535c145b333f973ea86dfdc2d7a99da618c40c64705ad98e322,ee11a5dff40c19a555f41fe42b48f00e618c91225622ae37b6c2bb67b76c4e49"`
 }
 
 //go:embed static/*
 var static embed.FS
-
-//go:embed templates/*
-var templates embed.FS
 
 var (
 	s                  Settings
@@ -46,6 +47,27 @@ func main() {
 	} else {
 		if canonicalHost := os.Getenv("CANONICAL_HOST"); canonicalHost != "" {
 			s.Domain = canonicalHost
+		}
+	}
+
+	if len(s.TrustedPubKeys) == 0 {
+		s.TrustedPubKeys = defaultTrustedPubKeys
+	}
+
+	if s.RelayConfigPath != "" {
+		configr, err := os.ReadFile(s.RelayConfigPath)
+		if err != nil {
+			log.Fatal().Err(err).Msgf("failed to load %q", s.RelayConfigPath)
+			return
+		}
+		err = json.Unmarshal(configr, &relayConfig)
+		if err != nil {
+			log.Fatal().Err(err).Msgf("failed to load %q", s.RelayConfigPath)
+			return
+		}
+		if !relayConfig.Valid() {
+			log.Fatal().Err(err).Msgf("invalid relay config file %q", s.RelayConfigPath)
+			return
 		}
 	}
 
@@ -74,6 +96,10 @@ func main() {
 		tailwindDebugStuff = template.HTML(fmt.Sprintf("<script src=\"https://cdn.tailwindcss.com?plugins=typography\"></script><script>\n%s</script><style type=\"text/tailwindcss\">%s</style>", config, style))
 	}
 
+	// image rendering stuff
+	initializeImageDrawingStuff()
+
+	// eventstore and internal db
 	deinitCache := initCache()
 	defer deinitCache()
 
@@ -86,6 +112,7 @@ func main() {
 	// expose our internal cache as a relay (mostly for debugging purposes)
 	relay := khatru.NewRelay()
 	relay.QueryEvents = append(relay.QueryEvents, db.QueryEvents)
+	relay.DeleteEvent = append(relay.DeleteEvent, db.DeleteEvent)
 	relay.RejectEvent = append(relay.RejectEvent,
 		func(context.Context, *nostr.Event) (bool, string) {
 			return true, "this relay is not writable"
@@ -109,13 +136,11 @@ func main() {
 	mux.HandleFunc("/p/", redirectFromPSlash)
 	mux.HandleFunc("/favicon.ico", redirectToFavicon)
 	mux.HandleFunc("/embed/", renderEmbedjs)
-	mux.HandleFunc("/profile-lastnotes/", renderEvent)
 	mux.HandleFunc("/", renderEvent)
 
 	log.Print("listening at http://0.0.0.0:" + s.Port)
 	server := &http.Server{Addr: "0.0.0.0:" + s.Port, Handler: cors.Default().Handler(relay)}
 	go func() {
-		server.ListenAndServe()
 		if err := server.ListenAndServe(); err != nil {
 			log.Error().Err(err).Msg("")
 		}

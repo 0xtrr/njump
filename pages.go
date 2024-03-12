@@ -1,4 +1,6 @@
-//go:generate tmpl bind ./...
+//go:generate npm install tailwindcss
+//go:generate npx tailwind -i node_modules/tailwindcss/tailwind.css -o tailwind-bundle.min.css --minify
+//go:generate go run -mod=mod github.com/a-h/templ/cmd/templ@latest generate
 
 package main
 
@@ -7,9 +9,8 @@ import (
 	"html/template"
 	"strings"
 
+	"github.com/a-h/templ"
 	"github.com/nbd-wtf/go-nostr/nip11"
-	sdk "github.com/nbd-wtf/nostr-sdk"
-	"github.com/tylermmorton/tmpl"
 )
 
 type TemplateID int
@@ -22,17 +23,11 @@ const (
 	FileMetadata
 	LiveEvent
 	LiveEventMessage
+	CalendarEvent
 	Other
 )
 
-var (
-	//go:embed templates/opengraph.html
-	tmplOpenGraph     string
-	OpenGraphTemplate = tmpl.MustCompile(&OpenGraphPartial{})
-)
-
-//tmpl:bind head_common.html
-type OpenGraphPartial struct {
+type OpenGraphParams struct {
 	SingleTitle string
 	// x (we will always render just the singletitle if we have that)
 	Superscript string
@@ -49,138 +44,50 @@ type OpenGraphPartial struct {
 	Text string
 }
 
-func (*OpenGraphPartial) TemplateText() string { return tmplOpenGraph }
-
-var (
-	//go:embed templates/head_common.html
-	tmplHeadCommon     string
-	HeadCommonTemplate = tmpl.MustCompile(&HeadCommonPartial{})
-)
-
-//tmpl:bind head_common.html
-type HeadCommonPartial struct {
-	IsProfile          bool
-	TailwindDebugStuff template.HTML
-	NaddrNaked         string
-	NeventNaked        string
-	Oembed             string
-}
-
-func (*HeadCommonPartial) TemplateText() string { return tmplHeadCommon }
-
-var (
-	//go:embed templates/top.html
-	tmplTop     string
-	TopTemplate = tmpl.MustCompile(&TopPartial{})
-)
-
-//tmpl:bind top.html
-type TopPartial struct{}
-
-func (*TopPartial) TemplateText() string { return tmplTop }
-
-var (
-	//go:embed templates/details.html
-	tmplDetails     string
-	DetailsTemplate = tmpl.MustCompile(&DetailsPartial{})
-)
-
-//tmpl:bind details.html
-type DetailsPartial struct {
+type DetailsParams struct {
 	HideDetails     bool
 	CreatedAt       string
 	EventJSON       template.HTML
+	Metadata        Metadata
 	Nevent          string
 	Nprofile        string
-	Npub            string
 	SeenOn          []string
 	Kind            int
 	KindNIP         string
 	KindDescription string
-
-	// kind-specific stuff
-	FileMetadata *Kind1063Metadata
-	LiveEvent    *Kind30311Metadata
+	Extra           templ.Component
 }
 
-func (*DetailsPartial) TemplateText() string { return tmplDetails }
-
-var (
-	//go:embed templates/clients.html
-	tmplClients     string
-	ClientsTemplate = tmpl.MustCompile(&ClientsPartial{})
-)
-
-//tmpl:bind clients.html
-type ClientsPartial struct {
-	Clients []ClientReference
+type HeadParams struct {
+	IsProfile   bool
+	NaddrNaked  string
+	NeventNaked string
+	Oembed      string
 }
 
-func (*ClientsPartial) TemplateText() string { return tmplClients }
-
-var (
-	//go:embed templates/footer.html
-	tmplFooter     string
-	FooterTemplate = tmpl.MustCompile(&FooterPartial{})
-)
-
-//tmpl:bind footer.html
-type FooterPartial struct {
-	BigImage string
+type TelegramInstantViewParams struct {
+	Video        string
+	VideoType    string
+	Image        string
+	Summary      template.HTML
+	Content      template.HTML
+	Description  string
+	Subject      string
+	Metadata     Metadata
+	AuthorLong   string
+	CreatedAt    string
+	ParentNevent string
 }
 
-func (*FooterPartial) TemplateText() string { return tmplFooter }
+type HomePageParams struct {
+	HeadParams
 
-var (
-	//go:embed templates/telegram_instant_view.html
-	tmplTelegramInstantView     string
-	TelegramInstantViewTemplate = tmpl.MustCompile(&TelegramInstantViewPage{})
-)
-
-type TelegramInstantViewPage struct {
-	Video       string
-	VideoType   string
-	Image       string
-	Summary     template.HTML
-	Content     template.HTML
-	Description string
-	Subject     string
-	Metadata    sdk.ProfileMetadata
-	AuthorLong  string
-	CreatedAt   string
-	ParentLink  template.HTML
-}
-
-func (*TelegramInstantViewPage) TemplateText() string { return tmplTelegramInstantView }
-
-var (
-	//go:embed templates/homepage.html
-	tmplHomePage     string
-	HomePageTemplate = tmpl.MustCompile(&HomePage{})
-)
-
-type HomePage struct {
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	FooterPartial     `tmpl:"footer"`
-
-	Host      string
 	Npubs     []string
 	LastNotes []string
 }
 
-func (*HomePage) TemplateText() string { return tmplHomePage }
-
-var (
-	//go:embed templates/archive.html
-	tmplArchive     string
-	ArchiveTemplate = tmpl.MustCompile(&ArchivePage{})
-)
-
-type ArchivePage struct {
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	FooterPartial     `tmpl:"footer"`
+type ArchivePageParams struct {
+	HeadParams
 
 	Title         string
 	PathPrefix    string
@@ -191,338 +98,162 @@ type ArchivePage struct {
 	PrevPage      int
 }
 
-func (*ArchivePage) TemplateText() string { return tmplArchive }
-
-var (
-	//go:embed templates/other.html
-	tmplOther     string
-	OtherTemplate = tmpl.MustCompile(&OtherPage{})
-)
-
-type OtherPage struct {
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	DetailsPartial    `tmpl:"details"`
-	FooterPartial     `tmpl:"footer"`
-
-	Kind            int
-	KindDescription string
-	Alt             string
-}
-
-func (*OtherPage) TemplateText() string { return tmplOther }
-
-var (
-	//go:embed templates/note.html
-	tmplNote     string
-	NoteTemplate = tmpl.MustCompile(&NotePage{})
-)
-
-type NotePage struct {
-	OpenGraphPartial  `tmpl:"opengraph"`
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	DetailsPartial    `tmpl:"details"`
-	ClientsPartial    `tmpl:"clients"`
-	FooterPartial     `tmpl:"footer"`
-
-	Content          template.HTML
-	CreatedAt        string
-	Metadata         sdk.ProfileMetadata
-	Npub             string
-	NpubShort        string
-	ParentLink       template.HTML
-	SeenOn           []string
-	Subject          string
-	TitleizedContent string
-}
-
-func (*NotePage) TemplateText() string { return tmplNote }
-
-var (
-	//go:embed templates/embedded_note.html
-	tmplEmbeddedNote     string
-	EmbeddedNoteTemplate = tmpl.MustCompile(&EmbeddedNotePage{})
-)
-
-type EmbeddedNotePage struct {
+type EmbeddedNoteParams struct {
 	Content   template.HTML
 	CreatedAt string
-	Metadata  sdk.ProfileMetadata
-	Npub      string
-	NpubShort string
+	Metadata  Metadata
 	SeenOn    []string
 	Subject   string
 	Url       string
 }
 
-func (*EmbeddedNotePage) TemplateText() string { return tmplEmbeddedNote }
+type ProfilePageParams struct {
+	HeadParams
 
-var (
-	//go:embed templates/profile.html
-	tmplProfile     string
-	ProfileTemplate = tmpl.MustCompile(&ProfilePage{})
-)
-
-type ProfilePage struct {
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	DetailsPartial    `tmpl:"details"`
-	ClientsPartial    `tmpl:"clients"`
-	FooterPartial     `tmpl:"footer"`
-
+	Details                    DetailsParams
 	AuthorRelays               []string
 	Content                    string
 	CreatedAt                  string
 	Domain                     string
 	LastNotes                  []EnhancedEvent
-	Metadata                   sdk.ProfileMetadata
+	Metadata                   Metadata
 	NormalizedAuthorWebsiteURL string
 	RenderedAuthorAboutText    template.HTML
 	Nevent                     string
-	Npub                       string
 	Nprofile                   string
-	IsReply                    string
 	Proxy                      string
 	Title                      string
+	Clients                    []ClientReference
 }
 
-func (*ProfilePage) TemplateText() string { return tmplProfile }
-
-var (
-	//go:embed templates/_last_notes.html
-	tmplLastNotes     string
-	LastNotesTemplate = tmpl.MustCompile(&LastNotesPage{})
-)
-
-type LastNotesPage struct {
-	LastNotes []EnhancedEvent
-}
-
-func (*LastNotesPage) TemplateText() string { return tmplLastNotes }
-
-var (
-	//go:embed templates/embedded_profile.html
-	tmplEmbeddedProfile     string
-	EmbeddedProfileTemplate = tmpl.MustCompile(&EmbeddedProfilePage{})
-)
-
-type EmbeddedProfilePage struct {
+type EmbeddedProfileParams struct {
 	AuthorRelays               []string
 	Content                    string
 	CreatedAt                  string
 	Domain                     string
-	Metadata                   sdk.ProfileMetadata
+	Metadata                   Metadata
 	NormalizedAuthorWebsiteURL string
 	RenderedAuthorAboutText    template.HTML
 	Nevent                     string
-	Npub                       string
 	Nprofile                   string
 	Proxy                      string
 	Title                      string
 }
 
-func (*EmbeddedProfilePage) TemplateText() string { return tmplEmbeddedProfile }
-
-var (
-	//go:embed templates/file_metadata.html
-	tmplFileMetadata     string
-	FileMetadataTemplate = tmpl.MustCompile(&FileMetadataPage{})
-)
-
-type FileMetadataPage struct {
-	OpenGraphPartial  `tmpl:"opengraph"`
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	DetailsPartial    `tmpl:"details"`
-	ClientsPartial    `tmpl:"clients"`
-	FooterPartial     `tmpl:"footer"`
-
-	Content          template.HTML
-	CreatedAt        string
-	Metadata         sdk.ProfileMetadata
-	Npub             string
-	NpubShort        string
-	ParentLink       template.HTML
-	SeenOn           []string
-	Style            Style
-	Subject          string
-	TitleizedContent string
-	Alt              string
-
-	FileMetadata Kind1063Metadata
-	IsImage      bool
-	IsVideo      bool
-}
-
-func (*FileMetadataPage) TemplateText() string { return tmplFileMetadata }
-
-var (
-	//go:embed templates/live_event.html
-	tmplLiveEvent     string
-	LiveEventTemplate = tmpl.MustCompile(&LiveEventPage{})
-)
-
-type LiveEventPage struct {
-	OpenGraphPartial  `tmpl:"opengraph"`
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	DetailsPartial    `tmpl:"details"`
-	ClientsPartial    `tmpl:"clients"`
-	FooterPartial     `tmpl:"footer"`
-
-	Content          template.HTML
-	CreatedAt        string
-	Metadata         sdk.ProfileMetadata
-	Npub             string
-	NpubShort        string
-	ParentLink       template.HTML
-	SeenOn           []string
-	Style            Style
-	Subject          string
-	TitleizedContent string
-	Alt              string
-
-	LiveEvent Kind30311Metadata
-}
-
-func (*LiveEventPage) TemplateText() string { return tmplLiveEvent }
-
-var (
-	//go:embed templates/live_event_message.html
-	tmplLiveEventMessage     string
-	LiveEventMessageTemplate = tmpl.MustCompile(&LiveEventMessagePage{})
-)
-
-type LiveEventMessagePage struct {
-	OpenGraphPartial  `tmpl:"opengraph"`
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	DetailsPartial    `tmpl:"details"`
-	ClientsPartial    `tmpl:"clients"`
-	FooterPartial     `tmpl:"footer"`
-
-	Content          template.HTML
-	CreatedAt        string
-	Metadata         sdk.ProfileMetadata
-	Npub             string
-	NpubShort        string
-	ParentLink       template.HTML
-	SeenOn           []string
-	Style            Style
-	Subject          string
-	TitleizedContent string
-	Alt              string
-
-	LiveEventMessage Kind1311Metadata
-}
-
-func (*LiveEventMessagePage) TemplateText() string { return tmplLiveEventMessage }
-
-var (
-	//go:embed templates/relay.html
-	tmplRelay     string
-	RelayTemplate = tmpl.MustCompile(&RelayPage{})
-)
-
-type RelayPage struct {
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	ClientsPartial    `tmpl:"clients"`
-	FooterPartial     `tmpl:"footer"`
+type RelayPageParams struct {
+	HeadParams
 
 	Info       *nip11.RelayInformationDocument
 	Hostname   string
 	Proxy      string
 	LastNotes  []EnhancedEvent
 	ModifiedAt string
+	Clients    []ClientReference
 }
 
-func (*RelayPage) TemplateText() string { return tmplRelay }
-
-var (
-	//go:embed templates/sitemap.xml
-	tmplSitemap     string
-	SitemapTemplate = tmpl.MustCompile(&SitemapPage{})
-)
-
-type SitemapPage struct {
-	Host       string
-	ModifiedAt string
-
-	// for the profile sitemap
-	Npub string
-
-	// for the relay sitemap
-	RelayHostname string
-	Info          *nip11.RelayInformationDocument
-
-	// for the profile and relay sitemaps
-	LastNotes []EnhancedEvent
-
-	// for the archive sitemap
-	PathPrefix string
-	Data       []string
+type ErrorPageParams struct {
+	HeadParams
+	Errors  string
+	Message string
 }
 
-func (*SitemapPage) TemplateText() string { return tmplSitemap }
-
-var (
-	//go:embed templates/rss.xml
-	tmplRSS     string
-	RSSTemplate = tmpl.MustCompile(&RSSPage{})
-)
-
-type RSSPage struct {
-	Host       string
-	ModifiedAt string
-	Title      string
-
-	// for the profile RSS
-	Npub     string
-	Metadata sdk.ProfileMetadata
-
-	// for the relay RSS
-	RelayHostname string
-	Info          *nip11.RelayInformationDocument
-
-	// for the profile and relay RSSs
-	LastNotes []EnhancedEvent
-
-	// for the archive RSS
-	PathPrefix string
-	Data       []string
-}
-
-func (*RSSPage) TemplateText() string { return tmplRSS }
-
-var (
-	//go:embed templates/error.html
-	tmplError     string
-	ErrorTemplate = tmpl.MustCompile(&ErrorPage{})
-)
-
-type ErrorPage struct {
-	HeadCommonPartial `tmpl:"head_common"`
-	TopPartial        `tmpl:"top"`
-	FooterPartial     `tmpl:"footer"`
-	Message           template.HTML
-	Errors            string
-}
-
-func (e *ErrorPage) TemplateText() string {
+func (e *ErrorPageParams) MessageHTML() template.HTML {
 	if e.Message != "" {
-		return tmplError
+		return template.HTML(e.Message)
 	}
+
 	switch {
 	case strings.Contains(e.Errors, "invalid checksum"):
-		e.Message = "It looks like you entered an invalid event code.<br> Check if you copied it fully, a good idea is compare the first and the last characters."
+		return "It looks like you entered an invalid event code.<br> Check if you copied it fully, a good idea is compare the first and the last characters."
 	case strings.Contains(e.Errors, "couldn't find this"):
-		e.Message = "Can't find the event in the relays. Try getting an `nevent1` code with relay hints."
-	case strings.Contains(e.Errors, "invalid bech32 string length"), strings.Contains(e.Errors, "invalid separator"):
-		e.Message = "You have typed a wrong event code, we need a URL path that starts with /npub1, /nprofile1, /nevent1, /naddr1, or something like /name@domain.com (or maybe just /domain.com) or an event id as hex (like /aef8b32af...)"
+		return "Can't find the event in the relays. Try getting an `nevent1` code with relay hints."
+	case strings.Contains(e.Errors, "invalid bech32 string length"),
+		strings.Contains(e.Errors, "invalid separator"),
+		strings.Contains(e.Errors, "not part of charset"):
+		return "You have typed a wrong event code, we need a URL path that starts with /npub1, /nprofile1, /nevent1, /naddr1, or something like /name@domain.com (or maybe just /domain.com) or an event id as hex (like /aef8b32af...)"
 	default:
-		e.Message = "I can't give any suggestions to solve the problem.<br> Please tag <a href='/dtonon.com'>daniele</a> and <a href='/fiatjaf.com'>fiatjaf</a> and complain!"
+		return "I can't give any suggestions to solve the problem.<br> Please tag <a href='/dtonon.com'>daniele</a> and <a href='/fiatjaf.com'>fiatjaf</a> and complain!"
 	}
-	return tmplError
+}
+
+type BaseEventPageParams struct {
+	Event    EnhancedEvent
+	Metadata Metadata
+	Style    Style
+	Alt      string
+}
+
+type NotePageParams struct {
+	BaseEventPageParams
+	OpenGraphParams
+	HeadParams
+
+	Details          DetailsParams
+	Content          template.HTML
+	Subject          string
+	TitleizedContent string
+	Clients          []ClientReference
+}
+
+type FileMetadataPageParams struct {
+	BaseEventPageParams
+	OpenGraphParams
+	HeadParams
+
+	Details DetailsParams
+	Content template.HTML
+
+	FileMetadata Kind1063Metadata
+	IsImage      bool
+	IsVideo      bool
+
+	Clients []ClientReference
+}
+
+type LiveEventPageParams struct {
+	BaseEventPageParams
+	OpenGraphParams
+	HeadParams
+
+	Details DetailsParams
+	Content template.HTML
+
+	LiveEvent Kind30311Metadata
+
+	Clients []ClientReference
+}
+
+type LiveEventMessagePageParams struct {
+	BaseEventPageParams
+	OpenGraphParams
+	HeadParams
+
+	Details          DetailsParams
+	Content          template.HTML
+	TitleizedContent string
+
+	Clients []ClientReference
+}
+
+type CalendarPageParams struct {
+	BaseEventPageParams
+	OpenGraphParams
+	HeadParams
+	Details       DetailsParams
+	StartAtDate   string
+	StartAtTime   string
+	EndAtDate     string
+	EndAtTime     string
+	Content       template.HTML
+	CalendarEvent Kind31922Or31923Metadata
+	Clients       []ClientReference
+}
+
+type OtherPageParams struct {
+	BaseEventPageParams
+	HeadParams
+
+	Details         DetailsParams
+	Kind            int
+	KindDescription string
 }
