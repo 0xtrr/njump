@@ -7,10 +7,9 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
-
-	"slices"
 
 	"github.com/microcosm-cc/bluemonday"
 	"mvdan.cc/xurls/v2"
@@ -28,7 +27,7 @@ const (
 var (
 	urlSuffixMatcher         = regexp.MustCompile(`[\w-_.]+\.[\w-_.]+(\/[\/\w]*)?$`)
 	nostrEveryMatcher        = regexp.MustCompile(`nostr:((npub|note|nevent|nprofile|naddr)1[a-z0-9]+)\b`)
-	nostrNoteNeventMatcher   = regexp.MustCompile(`nostr:((note|nevent)1[a-z0-9]+)\b`)
+	nostrNoteNeventMatcher   = regexp.MustCompile(`(?:^|<br/>|\s)nostr:((note|nevent|naddr)1[a-z0-9]+)\b(?:\s|<br/>|$)`)
 	nostrNpubNprofileMatcher = regexp.MustCompile(`nostr:((npub|nprofile)1[a-z0-9]+)\b`)
 
 	urlMatcher = func() *regexp.Regexp {
@@ -241,9 +240,9 @@ func replaceNostrURLsWithHTMLTags(matcher *regexp.Regexp, input string) string {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*4)
 			defer cancel()
 			name, _ := getNameFromNip19(ctx, nip19)
-			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1"><span>%s</span> (<span class="italic">%s</span>)</a>`, nip19, name, firstChars+"…"+lastChars)
+			return fmt.Sprintf(`<span itemprop="mentions" itemscope itemtype="https://schema.org/Person"><a itemprop="url" href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1"><span>%s</span> (<span class="italic">%s</span>)</a></span>`, nip19, name, firstChars+"…"+lastChars)
 		} else {
-			return fmt.Sprintf(`<a href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1">%s</a>`, nip19, firstChars+"…"+lastChars)
+			return fmt.Sprintf(`<span itemprop="mentions" itemscope itemtype="https://schema.org/SocialMediaPosting"><a itemprop="url" href="/%s" class="bg-lavender dark:prose:text-neutral-50 dark:text-neutral-50 dark:bg-garnet px-1">%s</a></span>`, nip19, firstChars+"…"+lastChars)
 		}
 	})
 }
@@ -313,9 +312,16 @@ func renderQuotesAsHTML(ctx context.Context, input string, usingTelegramInstantV
 			return nip19
 		}
 
-		content := fmt.Sprintf(
-			`<blockquote class="border-l-05rem border-l-strongpink border-solid"><div class="-ml-4 bg-gradient-to-r from-gray-100 dark:from-zinc-800 to-transparent mr-0 mt-0 mb-4 pl-4 pr-2 py-2">quoting %s </div> %s </blockquote>`, match, event.Content)
-		return basicFormatting(content, false, usingTelegramInstantView, false)
+		quotedEvent := basicFormatting(match, false, usingTelegramInstantView, false)
+		content := ""
+		if event.Kind == 30023 {
+			content = mdToHTML(event.Content, usingTelegramInstantView, false)
+		} else {
+			content = basicFormatting(event.Content, false, usingTelegramInstantView, false)
+		}
+		content = fmt.Sprintf(
+			`<blockquote class="border-l-05rem border-l-strongpink border-solid"><div class="-ml-4 bg-gradient-to-r from-gray-100 dark:from-zinc-800 to-transparent mr-0 mt-0 mb-4 pl-4 pr-2 py-2">quoting %s </div> %s </blockquote>`, quotedEvent, content)
+		return content
 	})
 }
 
@@ -332,10 +338,9 @@ func sanitizeXSS(html string) string {
 	p := bluemonday.UGCPolicy()
 	p.AllowStyling()
 	p.RequireNoFollowOnLinks(false)
-	p.AllowElements("video", "source", "iframe")
+	p.AllowElements("video", "source")
 	p.AllowAttrs("controls", "width").OnElements("video")
 	p.AllowAttrs("src", "width").OnElements("source")
-	p.AllowAttrs("src", "frameborder").OnElements("iframe")
 	return p.Sanitize(html)
 }
 
@@ -470,4 +475,20 @@ func clamp(val, low, high int) int {
 		return high
 	}
 	return val
+}
+
+func getUTCOffset(loc *time.Location) string {
+	// Get the offset from UTC
+	_, offset := time.Now().In(loc).Zone()
+
+	// Calculate the offset in hours
+	offsetHours := offset / 3600
+
+	// Format the UTC offset string
+	sign := "+"
+	if offsetHours < 0 {
+		sign = "-"
+		offsetHours = -offsetHours
+	}
+	return fmt.Sprintf("UTC%s%d", sign, offsetHours)
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"html"
 	"html/template"
 	"net/http"
@@ -16,8 +15,6 @@ func renderEmbedjs(w http.ResponseWriter, r *http.Request) {
 }
 
 func renderEmbedded(w http.ResponseWriter, r *http.Request, code string) {
-	fmt.Println(r.URL.Path, "@.", r.Header.Get("user-agent"))
-
 	data, err := grabData(r.Context(), code, false)
 	if err != nil {
 		w.Header().Set("Cache-Control", "max-age=60")
@@ -59,7 +56,7 @@ func renderEmbedded(w http.ResponseWriter, r *http.Request, code string) {
 			Metadata:                   data.metadata,
 			NormalizedAuthorWebsiteURL: normalizeWebsiteURL(data.metadata.Website),
 			RenderedAuthorAboutText:    template.HTML(basicFormatting(html.EscapeString(data.metadata.About), false, false, true)),
-			AuthorRelays:               data.authorRelays,
+			AuthorRelays:               data.authorRelaysPretty,
 		})
 	default:
 		log.Error().Int("templateId", int(data.templateId)).Msg("no way to render")

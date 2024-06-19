@@ -30,18 +30,18 @@ func (r *RelayConfig) Valid() bool {
 
 var (
 	pool   = nostr.NewSimplePool(context.Background())
+	sys    = sdk.System(sdk.WithPool(pool))
 	serial int
 
 	relayConfig = RelayConfig{
 		Everything: []string{
 			"wss://nostr-pub.wellorder.net",
-			"wss://saltivka.org",
 			"wss://relay.damus.io",
 			"wss://relay.nostr.bg",
 			"wss://nostr.wine",
 			"wss://nos.lol",
 			"wss://nostr.mom",
-			"wss://atlas.nostr.land",
+			"wss://nostr.land",
 			"wss://relay.snort.social",
 			"wss://offchain.pub",
 			"wss://relay.primal.net",
@@ -153,13 +153,10 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 	if author != "" {
 		// fetch relays for author
 		authorRelays := relaysForPubkey(ctx, author, relays...)
-		if len(authorRelays) > 5 {
-			authorRelays = authorRelays[:5]
+		if len(authorRelays) > 3 {
+			authorRelays = authorRelays[:3]
 		}
 		relays = append(relays, authorRelays...)
-	}
-	for len(relays) < 5 {
-		relays = append(relays, getRandomRelay())
 	}
 
 	relays = unique(relays)
@@ -219,7 +216,7 @@ func getEvent(ctx context.Context, code string, relayHints []string) (*nostr.Eve
 	return result, allRelays, nil
 }
 
-func authorLastNotes(ctx context.Context, pubkey string, relays []string, isSitemap bool) []*nostr.Event {
+func authorLastNotes(ctx context.Context, pubkey string, isSitemap bool) []*nostr.Event {
 	limit := 100
 	store := true
 	useLocalStore := true
@@ -236,42 +233,38 @@ func authorLastNotes(ctx context.Context, pubkey string, relays []string, isSite
 	}
 	var lastNotes []*nostr.Event
 
-	// fetch from external relays asynchronously
-	external := make(chan []*nostr.Event)
-	go func() {
-		notes := make([]*nostr.Event, 0, filter.Limit)
-		defer func() {
-			external <- notes
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-		defer cancel()
-		relays = unique(append(relays, getRandomRelay(), getRandomRelay()))
-		ch := pool.SubManyEose(ctx, relays, nostr.Filters{filter})
-		for {
-			select {
-			case ie, more := <-ch:
-				if !more {
-					return
-				}
-				notes = append(notes, ie.Event)
-				if store {
-					db.SaveEvent(ctx, ie.Event)
-					attachRelaysToEvent(ie.Event.ID, ie.Relay.URL)
-					scheduleEventExpiration(ie.Event.ID, time.Hour*24)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	// fetch from local store if available
 	if useLocalStore {
 		lastNotes, _ = eventstore.RelayWrapper{Store: db}.QuerySync(ctx, filter)
 	}
 	if len(lastNotes) < 5 {
 		// if we didn't get enough notes (or if we didn't even query the local store), wait for the external relays
-		lastNotes = <-external
+		lastNotes = make([]*nostr.Event, 0, filter.Limit)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+
+		relays := limitAt(relaysForPubkey(ctx, pubkey), 5)
+		for len(relays) < 4 {
+			relays = unique(append(relays, getRandomRelay()))
+		}
+		ch := pool.SubManyEose(ctx, relays, nostr.Filters{filter})
+	out:
+		for {
+			select {
+			case ie, more := <-ch:
+				if !more {
+					break out
+				}
+				lastNotes = append(lastNotes, ie.Event)
+				if store {
+					db.SaveEvent(ctx, ie.Event)
+					attachRelaysToEvent(ie.Event.ID, ie.Relay.URL)
+					scheduleEventExpiration(ie.Event.ID, time.Hour*24)
+				}
+			case <-ctx.Done():
+				break out
+			}
+		}
 	}
 
 	// sort before returning
@@ -315,12 +308,8 @@ func relaysForPubkey(ctx context.Context, pubkey string, extraRelays ...string) 
 	pubkeyRelays := make([]string, 0, 12)
 	if ok := cache.GetJSON("io:"+pubkey, &pubkeyRelays); !ok {
 		ctx, cancel := context.WithTimeout(ctx, time.Millisecond*1500)
-		for _, relay := range sdk.FetchRelaysForPubkey(ctx, pool, pubkey, extraRelays...) {
-			if relay.Outbox {
-				pubkeyRelays = append(pubkeyRelays, relay.URL)
-			}
-		}
-		cancel()
+		defer cancel()
+		pubkeyRelays = sys.FetchOutboxRelays(ctx, pubkey)
 		if len(pubkeyRelays) > 0 {
 			cache.SetJSONWithTTL("io:"+pubkey, pubkeyRelays, time.Hour*24*7)
 		}

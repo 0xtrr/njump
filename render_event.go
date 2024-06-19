@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/a-h/templ"
 	"github.com/nbd-wtf/go-nostr"
@@ -108,7 +109,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// from here onwards we know we're rendering an event
-	fmt.Println(r.URL.Path, "#/", r.Header.Get("user-agent"))
+	//
 
 	// gather page style from user-agent
 	style := getPreviewStyle(r)
@@ -263,6 +264,8 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		data.content = strings.ReplaceAll(data.content, placeholderTag, "nostr:"+nreplace)
 	}
 	if data.event.Kind == 30023 || data.event.Kind == 30024 {
+		// Remove duplicate title inside the body
+		data.content = strings.ReplaceAll(data.content, "# "+subject, "")
 		data.content = mdToHTML(data.content, data.templateId == TelegramInstantView, false)
 	} else {
 		// first we run basicFormatting, which turns URLs into their appropriate HTML tags
@@ -385,6 +388,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 			Clients:          generateClientList(data.event.Kind, enhancedCode),
 			Details:          detailsData,
 			Content:          template.HTML(content),
+			Cover:            data.cover,
 			Subject:          subject,
 			TitleizedContent: titleizedContent,
 		})
@@ -462,19 +466,27 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var StartAtDate, StartAtTime string
-		StartAtDate = data.kind31922Or31923Metadata.Start.Format("02 Jan 2006")
-		if data.kind31922Or31923Metadata.Start.Hour() != 0 ||
-			data.kind31922Or31923Metadata.Start.Minute() != 0 ||
-			data.kind31922Or31923Metadata.Start.Second() != 0 {
-			StartAtTime = data.kind31922Or31923Metadata.Start.Format("15:04")
+		var EndAtDate, EndAtTime string
+		var TimeZone string
+
+		location, err := time.LoadLocation(data.kind31922Or31923Metadata.StartTzid)
+		if err != nil {
+			// Set default TimeZone to UTC
+			location = time.UTC
+		}
+		TimeZone = getUTCOffset(location)
+
+		StartAtDate = data.kind31922Or31923Metadata.Start.In(location).Format("02 Jan 2006")
+		EndAtDate = data.kind31922Or31923Metadata.End.In(location).Format("02 Jan 2006")
+		if data.kind31922Or31923Metadata.CalendarEventKind == 31923 {
+			StartAtTime = data.kind31922Or31923Metadata.Start.In(location).Format("15:04")
+			EndAtTime = data.kind31922Or31923Metadata.End.In(location).Format("15:04")
 		}
 
-		var EndAtDate, EndAtTime string
-		EndAtDate = data.kind31922Or31923Metadata.End.Format("02 Jan 2006")
-		if data.kind31922Or31923Metadata.End.Hour() != 0 ||
-			data.kind31922Or31923Metadata.End.Minute() != 0 ||
-			data.kind31922Or31923Metadata.End.Second() != 0 {
-			EndAtTime = data.kind31922Or31923Metadata.End.Format("15:04")
+		// Reset EndDate/Time if it is non initialized (beginning of the Unix epoch)
+		if data.kind31922Or31923Metadata.End == (time.Time{}) {
+			EndAtDate = ""
+			EndAtTime = ""
 		}
 
 		component = calendarEventTemplate(CalendarPageParams{
@@ -485,7 +497,7 @@ func renderEvent(w http.ResponseWriter, r *http.Request) {
 				NaddrNaked:  data.naddrNaked,
 				NeventNaked: data.neventNaked,
 			},
-
+			TimeZone:      TimeZone,
 			StartAtDate:   StartAtDate,
 			StartAtTime:   StartAtTime,
 			EndAtDate:     EndAtDate,

@@ -27,7 +27,7 @@ type Data struct {
 	modifiedAt               string
 	parentLink               template.HTML
 	metadata                 Metadata
-	authorRelays             []string
+	authorRelaysPretty       []string
 	authorLong               string
 	renderableLastNotes      []EnhancedEvent
 	kindDescription          string
@@ -35,6 +35,7 @@ type Data struct {
 	video                    string
 	videoType                string
 	image                    string
+	cover                    string
 	content                  string
 	alt                      string
 	kind1063Metadata         *Kind1063Metadata
@@ -70,6 +71,20 @@ func grabData(ctx context.Context, code string, isProfileSitemap bool) (*Data, e
 		},
 	}
 
+	data.authorRelaysPretty = make([]string, 0, len(relays))
+	for _, url := range relaysForPubkey(ctx, event.PubKey) {
+		if isntRealRelay(url) {
+			continue
+		}
+		for _, excluded := range relayConfig.ExcludedRelays {
+			if strings.Contains(url, excluded) {
+				continue
+			}
+		}
+		data.authorRelaysPretty = append(data.authorRelaysPretty, trimProtocol(url))
+	}
+	data.authorRelaysPretty = unique(data.authorRelaysPretty)
+
 	npub, _ := nip19.EncodePublicKey(event.PubKey)
 	npubShort := npub[:8] + "…" + npub[len(npub)-4:]
 	data.authorLong = npub // hopefully will be replaced later
@@ -79,7 +94,6 @@ func grabData(ctx context.Context, code string, isProfileSitemap bool) (*Data, e
 	data.naddrNaked = ""
 	data.createdAt = time.Unix(int64(event.CreatedAt), 0).Format("2006-01-02 15:04:05")
 	data.modifiedAt = time.Unix(int64(event.CreatedAt), 0).Format("2006-01-02T15:04:05Z07:00")
-	data.authorRelays = []string{}
 
 	if event.Kind >= 30000 && event.Kind < 40000 {
 		if d := event.Tags.GetFirst([]string{"d", ""}); d != nil {
@@ -93,25 +107,7 @@ func grabData(ctx context.Context, code string, isProfileSitemap bool) (*Data, e
 	switch event.Kind {
 	case 0:
 		data.templateId = Profile
-		{
-			rawAuthorRelays := []string{}
-			ctx, cancel := context.WithTimeout(ctx, time.Second*4)
-			rawAuthorRelays = relaysForPubkey(ctx, event.PubKey)
-			cancel()
-			for _, relay := range rawAuthorRelays {
-				for _, excluded := range relayConfig.ExcludedRelays {
-					if strings.Contains(relay, excluded) {
-						continue
-					}
-				}
-				if strings.Contains(relay, "/npub1") {
-					continue // skip relays with personalyzed query like filter.nostr.wine
-				}
-				data.authorRelays = append(data.authorRelays, trimProtocol(relay))
-			}
-		}
-
-		lastNotes := authorLastNotes(ctx, event.PubKey, data.authorRelays, isProfileSitemap)
+		lastNotes := authorLastNotes(ctx, event.PubKey, isProfileSitemap)
 		data.renderableLastNotes = make([]EnhancedEvent, len(lastNotes))
 		for i, levt := range lastNotes {
 			data.renderableLastNotes[i] = EnhancedEvent{levt, []string{}}
@@ -136,7 +132,7 @@ func grabData(ctx context.Context, code string, isProfileSitemap bool) (*Data, e
 		data.kind30311Metadata = &Kind30311Metadata{LiveEvent: nip53.ParseLiveEvent(*event)}
 		host := data.kind30311Metadata.GetHost()
 		if host != nil {
-			hostProfile := sdk.FetchProfileMetadata(ctx, pool, host.PubKey, data.event.relays...)
+			hostProfile := sys.FetchProfileMetadata(ctx, host.PubKey)
 			data.kind30311Metadata.Host = &hostProfile
 		}
 	case 1311:
@@ -175,6 +171,11 @@ func grabData(ctx context.Context, code string, isProfileSitemap bool) (*Data, e
 		data.kindDescription = fmt.Sprintf("Kind %d", event.Kind)
 	}
 	data.kindNIP = kindNIPs[event.Kind]
+
+	image := event.Tags.GetFirst([]string{"image", ""})
+	if event.Kind == 30023 && image != nil {
+		data.cover = (*image)[1]
+	}
 
 	if event.Kind == 1063 {
 		if data.kind1063Metadata.IsImage() {

@@ -92,18 +92,6 @@ type AboutParams struct {
 	HeadParams
 }
 
-type ArchivePageParams struct {
-	HeadParams
-
-	Title         string
-	PathPrefix    string
-	Data          []string
-	ModifiedAt    string
-	PaginationUrl string
-	NextPage      int
-	PrevPage      int
-}
-
 type EmbeddedNoteParams struct {
 	Content   template.HTML
 	CreatedAt string
@@ -196,6 +184,7 @@ type NotePageParams struct {
 
 	Details          DetailsParams
 	Content          template.HTML
+	Cover            string
 	Subject          string
 	TitleizedContent string
 	Clients          []ClientReference
@@ -246,6 +235,7 @@ type CalendarPageParams struct {
 	OpenGraphParams
 	HeadParams
 	Details       DetailsParams
+	TimeZone      string
 	StartAtDate   string
 	StartAtTime   string
 	EndAtDate     string

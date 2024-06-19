@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"html"
 	"html/template"
 	"net/http"
@@ -9,8 +8,6 @@ import (
 )
 
 func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
-	fmt.Println(r.URL.Path, "@.", r.Header.Get("user-agent"))
-
 	isSitemap := false
 	if strings.HasSuffix(code, ".xml") {
 		code = code[:len(code)-4]
@@ -21,11 +18,6 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 	if strings.HasSuffix(code, ".rss") {
 		code = code[:len(code)-4]
 		isRSS = true
-	}
-
-	isLastNotes := false
-	if r.URL.Query().Get("just-last-notes") == "true" {
-		isLastNotes = true
 	}
 
 	data, err := grabData(r.Context(), code, isSitemap)
@@ -55,12 +47,6 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 			Metadata:   data.metadata,
 			LastNotes:  data.renderableLastNotes,
 		})
-	} else if isLastNotes {
-		w.Header().Add("content-type", "text/html")
-		if len(data.renderableLastNotes) != 0 {
-			w.Header().Set("Cache-Control", "max-age=3600")
-		}
-		err = lastNotesTemplate(data.renderableLastNotes).Render(r.Context(), w)
 	} else {
 		w.Header().Add("content-type", "text/html")
 		w.Header().Set("Cache-Control", "max-age=86400")
@@ -79,7 +65,7 @@ func renderProfile(w http.ResponseWriter, r *http.Request, code string) {
 			NormalizedAuthorWebsiteURL: normalizeWebsiteURL(data.metadata.Website),
 			RenderedAuthorAboutText:    template.HTML(basicFormatting(html.EscapeString(data.metadata.About), false, false, false)),
 			Nprofile:                   data.nprofile,
-			AuthorRelays:               data.authorRelays,
+			AuthorRelays:               data.authorRelaysPretty,
 			LastNotes:                  data.renderableLastNotes,
 			Clients: generateClientList(data.event.Kind, data.nprofile,
 				func(c ClientReference, s string) string {

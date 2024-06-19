@@ -36,8 +36,6 @@ var fonts embed.FS
 var multiNewlineRe = regexp.MustCompile(`\n\n+`)
 
 func renderImage(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(r.URL.Path, ":~", r.Header.Get("user-agent"))
-
 	code := r.URL.Path[1+len("njump/image/"):]
 	if code == "" {
 		fmt.Fprintf(w, "call /njump/image/<nip19 code>")
@@ -74,7 +72,7 @@ func renderImage(w http.ResponseWriter, r *http.Request) {
 
 	img, err := drawImage(paragraphs, getPreviewStyle(r), data.metadata, data.createdAt)
 	if err != nil {
-		log.Printf("error writing image: %s", err)
+		log.Warn().Err(err).Msg("failed to draw paragraphs as image")
 		http.Error(w, "error writing image!", 500)
 		return
 	}
@@ -88,7 +86,14 @@ func renderImage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func drawImage(paragraphs []string, style Style, metadata Metadata, date string) (image.Image, error) {
+func drawImage(paragraphs []string, style Style, metadata Metadata, date string) (image image.Image, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic while drawing image")
+			log.Warn().Interface("r", r).Msg("panic while drawing image")
+		}
+	}()
+
 	fontSize := 25
 	width := 700
 	height := 525
